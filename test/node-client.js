@@ -1,8 +1,5 @@
 /**
- * RFID Live Listener Node Client
- * 
- * Connects to the RFID Relay Server at /node and streams live card scans with 0 latency.
- * Supports 2-way live communication back to host (e.g. commands/acknowledgements).
+ * RFID Live Listener Node Client (Dual Mode: WebSocket + HTTP JSON API)
  * 
  * Usage:
  *   node test/node-client.js
@@ -12,11 +9,13 @@
 
 require('dotenv').config();
 const { WebSocket } = require('ws');
+const http = require('http');
+const https = require('https');
 const readline = require('readline');
 
 // Parse CLI flags
 const args = process.argv.slice(2);
-let isLocal = args.includes('--local');
+const isLocal = args.includes('--local');
 let customHost = null;
 let customAuth = null;
 
@@ -28,79 +27,141 @@ for (let i = 0; i < args.length; i++) {
 const AUTH_PASSWORD = customAuth || process.env.AUTH_PASSWORD || '00000000';
 const DEFAULT_HOST = isLocal ? 'localhost:3000' : 'rfid.pranab.space';
 const TARGET_HOST = customHost || DEFAULT_HOST;
-const PROTOCOL = TARGET_HOST.includes('localhost') || TARGET_HOST.includes('127.0.0.1') ? 'ws' : 'wss';
+const isHttps = !TARGET_HOST.includes('localhost') && !TARGET_HOST.includes('127.0.0.1');
+const PROTOCOL = isHttps ? 'wss' : 'ws';
+const HTTP_PROTOCOL = isHttps ? 'https' : 'http';
 const WS_URL = `${PROTOCOL}://${TARGET_HOST}/node?auth=${encodeURIComponent(AUTH_PASSWORD)}`;
 
 let ws = null;
-let reconnectTimer = null;
 let scansReceived = 0;
+let isPolling = false;
 
 console.clear();
 console.log('====================================================');
 console.log('       RFID RC522 LIVE LISTENER NODE CLIENT        ');
 console.log('====================================================');
-console.log(` Target Server : ${PROTOCOL}://${TARGET_HOST}/node`);
+console.log(` Target Server : ${HTTP_PROTOCOL}://${TARGET_HOST}/node`);
 console.log(` Auth Key      : ${AUTH_PASSWORD.replace(/./g, '*')}`);
-console.log(` Latency Mode  : 0-Latency Live Stream (WebSocket)`);
+console.log(` Mode          : Dual Stream (WebSocket + JSON API)`);
 console.log('====================================================');
-console.log(' Type any message + Enter to send 2-way command to NodeMCU');
+console.log(' Type any command + Enter to send 2-way instruction to NodeMCU');
 console.log(' Press Ctrl+C to exit\n');
 
-function connect() {
-  if (reconnectTimer) clearTimeout(reconnectTimer);
+function connectWs() {
+  console.log(`[CONNECTING] Connecting via WebSocket to ${WS_URL}...`);
 
-  console.log(`[CONNECTING] Connecting to ${WS_URL}...`);
-  ws = new WebSocket(WS_URL);
+  try {
+    ws = new WebSocket(WS_URL);
 
-  ws.on('open', () => {
-    console.log('\x1b[32m[CONNECTED]\x1b[0m Connected as active node. Listening for RFID scans...\n');
-  });
+    ws.on('open', () => {
+      console.log('\x1b[32m[CONNECTED]\x1b[0m Connected as active node via WebSocket.\n');
+    });
 
-  ws.on('message', (data) => {
+    ws.on('message', (data) => {
+      try {
+        const msg = JSON.parse(data.toString());
+
+        if (msg.type === 'welcome') {
+          console.log(`\x1b[36m[SERVER WELCOME]\x1b[0m ${msg.message}`);
+          console.log(`[HOSTS ACTIVE] ${msg.hostsActive || 0} ESP8266 reader(s) currently online.\n`);
+          return;
+        }
+
+        if (msg.type === 'rfid' && msg.uid) {
+          displayRfidScan(msg.uid, msg.timestamp);
+          return;
+        }
+
+        console.log(`[RECV]`, msg);
+      } catch {
+        console.log(`[RAW RECV] ${data.toString()}`);
+      }
+    });
+
+    ws.on('close', (code, reason) => {
+      console.log(`\x1b[33m[WS CLOSED]\x1b[0m Code: ${code}. Switching to Live HTTP JSON API polling...\n`);
+      ws = null;
+      startHttpPolling();
+    });
+
+    ws.on('error', (err) => {
+      console.warn(`\x1b[33m[WS ERROR]\x1b[0m ${err.message}. Activating HTTP JSON API...\n`);
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+      startHttpPolling();
+    });
+  } catch (e) {
+    startHttpPolling();
+  }
+}
+
+async function startHttpPolling() {
+  if (isPolling) return;
+  isPolling = true;
+  console.log('\x1b[32m[CONNECTED]\x1b[0m Connected via Live HTTP JSON API. Listening for RFID cards...\n');
+
+  while (isPolling) {
     try {
-      const msg = JSON.parse(data.toString());
+      const url = `${HTTP_PROTOCOL}://${TARGET_HOST}/node?auth=${encodeURIComponent(AUTH_PASSWORD)}&wait=true`;
+      const data = await fetchJson(url);
 
-      if (msg.type === 'welcome') {
-        console.log(`\x1b[36m[SERVER WELCOME]\x1b[0m ${msg.message}`);
-        console.log(`[HOSTS ACTIVE] ${msg.hostsActive || 0} ESP8266 reader(s) currently online.\n`);
-        return;
+      if (data && data.error) {
+        console.error(`\x1b[31m[AUTH ERROR]\x1b[0m ${data.error}`);
+        isPolling = false;
+        break;
       }
 
-      if (msg.type === 'rfid' && msg.uid) {
-        scansReceived++;
-        const now = new Date();
-        const latency = msg.timestamp ? `${Math.max(0, Date.now() - msg.timestamp)}ms` : 'instant';
-
-        // Terminal Bell sound
-        process.stdout.write('\x07');
-
-        console.log('┌────────────────────────────────────────────────────────┐');
-        console.log(`│ \x1b[33m⚡ RFID CARD SCANNED\x1b[0m (#${scansReceived})                           │`);
-        console.log(`│   UID       : \x1b[32m\x1b[1m${msg.uid.padEnd(20)}\x1b[0m                 │`);
-        console.log(`│   Time      : ${now.toLocaleTimeString().padEnd(20)}                 │`);
-        console.log(`│   Stream Lat: ${latency.padEnd(20)}                 │`);
-        console.log('└────────────────────────────────────────────────────────┘\n');
-        return;
+      if (data && data.type === 'rfid' && data.uid) {
+        displayRfidScan(data.uid, data.timestamp);
       }
-
-      console.log(`[RECV]`, msg);
-    } catch {
-      console.log(`[RAW RECV] ${data.toString()}`);
+    } catch (err) {
+      // Re-poll on timeout or transient drop
+      await new Promise(r => setTimeout(r, 1000));
     }
-  });
+  }
+}
 
-  ws.on('close', (code, reason) => {
-    console.log(`\x1b[31m[DISCONNECTED]\x1b[0m Connection closed (Code: ${code}, Reason: ${reason || 'None'}).`);
-    if (code === 4401 || code === 1008 || String(reason).includes('401')) {
-      console.error('\x1b[31m[AUTH ERROR]\x1b[0m Authentication failed. Please check AUTH_PASSWORD in .env');
-    }
-    console.log('[RETRY] Reconnecting in 3 seconds...');
-    reconnectTimer = setTimeout(connect, 3000);
-  });
+function fetchJson(urlStr) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(urlStr);
+    const lib = parsed.protocol === 'https:' ? https : http;
 
-  ws.on('error', (err) => {
-    console.error(`\x1b[31m[ERROR]\x1b[0m ${err.message}`);
+    const req = lib.get(urlStr, { timeout: 30000 }, (res) => {
+      let body = '';
+      res.on('data', chunk => body += chunk);
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(body));
+        } catch {
+          resolve({ raw: body });
+        }
+      });
+    });
+
+    req.on('error', reject);
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ status: 'timeout' });
+    });
   });
+}
+
+function displayRfidScan(uid, timestamp) {
+  scansReceived++;
+  const now = new Date();
+  const latency = timestamp ? `${Math.max(0, Date.now() - timestamp)}ms` : 'instant';
+
+  // Terminal bell
+  process.stdout.write('\x07');
+
+  console.log('┌────────────────────────────────────────────────────────┐');
+  console.log(`│ \x1b[33m⚡ RFID CARD SCANNED\x1b[0m (#${scansReceived})                           │`);
+  console.log(`│   UID       : \x1b[32m\x1b[1m${uid.padEnd(20)}\x1b[0m                 │`);
+  console.log(`│   Time      : ${now.toLocaleTimeString().padEnd(20)}                 │`);
+  console.log(`│   Stream Lat: ${latency.padEnd(20)}                 │`);
+  console.log('└────────────────────────────────────────────────────────┘\n');
 }
 
 // Setup interactive CLI input for 2-way data transfer back to NodeMCU
@@ -110,21 +171,39 @@ const rl = readline.createInterface({
   terminal: false
 });
 
-rl.on('line', (line) => {
+rl.on('line', async (line) => {
   const trimmed = line.trim();
   if (!trimmed) return;
 
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({
-      type: 'command',
-      action: trimmed,
-      from: 'node-client-cli',
-      timestamp: Date.now()
-    }));
-    console.log(`\x1b[34m[2-WAY SENT -> NODEMCU]\x1b[0m Command: "${trimmed}"`);
-  } else {
-    console.log('\x1b[33m[OFFLINE]\x1b[0m Cannot send message: Node is not connected.');
+  console.log(`[SENDING 2-WAY COMMAND] "${trimmed}"...`);
+
+  // Send via HTTP POST in JSON format
+  try {
+    const postUrl = `${HTTP_PROTOCOL}://${TARGET_HOST}/node?auth=${encodeURIComponent(AUTH_PASSWORD)}`;
+    const parsed = new URL(postUrl);
+    const lib = parsed.protocol === 'https:' ? https : http;
+
+    const postData = JSON.stringify({ command: trimmed, from: 'node-cli', time: Date.now() });
+    const req = lib.request(postUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData)
+      }
+    }, (res) => {
+      let b = '';
+      res.on('data', c => b += c);
+      res.on('end', () => {
+        console.log(`\x1b[34m[COMMAND RESPONSE]\x1b[0m ${b}\n`);
+      });
+    });
+
+    req.on('error', (e) => console.error('Send error:', e.message));
+    req.write(postData);
+    req.end();
+  } catch (err) {
+    console.error('Command failed:', err.message);
   }
 });
 
-connect();
+connectWs();

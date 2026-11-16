@@ -330,6 +330,8 @@
 
   <script>
     let ws = null;
+    let isPolling = false;
+    let abortController = null;
     let scans = 0;
 
     // Auto-detect default host
@@ -372,10 +374,8 @@
     }
 
     function toggleConnection() {
-      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-        ws.close();
-        ws = null;
-        updateStatus('offline', 'Disconnected');
+      if (isPolling || (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING))) {
+        disconnectAll();
         return;
       }
 
@@ -385,46 +385,94 @@
         updateStatus('offline', 'Enter the authorization password first');
         return;
       }
+
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = `${protocol}//${host}/node?auth=${encodeURIComponent(password)}`;
 
-      console.log('[NODE] Connecting to:', wsUrl);
+      console.log('[NODE] Connecting via WebSocket:', wsUrl);
       updateStatus('connecting', 'Connecting...');
 
-      ws = new WebSocket(wsUrl);
+      try {
+        ws = new WebSocket(wsUrl);
 
-      ws.onopen = () => {
-        console.log('[NODE] WebSocket open!');
-        updateStatus('online', 'Connected as Node (Live 0-Latency)');
-      };
+        ws.onopen = () => {
+          console.log('[NODE] WebSocket connected!');
+          updateStatus('online', 'Connected as Node (Live 0-Latency)');
+        };
 
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          console.log('[NODE] Message:', data);
-          if (data.type === 'rfid' && data.uid) {
-            handleRfidScan(data);
-          } else if (data.type === 'welcome') {
-            console.log('[NODE] Server welcome:', data);
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            console.log('[NODE] Message received:', data);
+            if (data.type === 'rfid' && data.uid) {
+              handleRfidScan(data);
+            }
+          } catch (e) {
+            console.log('[NODE] Raw data:', event.data);
           }
-        } catch (e) {
-          console.log('[NODE] Raw:', event.data);
-        }
-      };
+        };
 
-      ws.onclose = (event) => {
-        console.log('[NODE] WebSocket closed. Code:', event.code, 'Reason:', event.reason);
+        ws.onclose = (event) => {
+          console.warn('[NODE] WebSocket closed (code ' + event.code + '). Switching to Live HTTP JSON API...');
+          ws = null;
+          if (event.code === 4401 || event.code === 1008) {
+            updateStatus('offline', 'Unauthorized: Invalid Password');
+          } else {
+            // Auto-switch to HTTP Long-Polling JSON API
+            startHttpPolling(host, password);
+          }
+        };
+
+        ws.onerror = (err) => {
+          console.warn('[NODE] WebSocket error, activating HTTP JSON API fallback...');
+        };
+      } catch (err) {
+        startHttpPolling(host, password);
+      }
+    }
+
+    async function startHttpPolling(host, password) {
+      if (isPolling) return;
+      isPolling = true;
+      updateStatus('online', 'Connected as Node (Live JSON API)');
+
+      const proto = window.location.protocol.startsWith('https') ? 'https:' : 'http:';
+
+      while (isPolling) {
+        try {
+          abortController = new AbortController();
+          const res = await fetch(`${proto}//${host}/node?auth=${encodeURIComponent(password)}&wait=true`, {
+            signal: abortController.signal
+          });
+
+          if (res.status === 401) {
+            updateStatus('offline', 'Unauthorized: Invalid Password');
+            isPolling = false;
+            break;
+          }
+
+          const data = await res.json();
+          if (data && data.type === 'rfid' && data.uid) {
+            handleRfidScan(data);
+          }
+        } catch (err) {
+          if (!isPolling) break;
+          await new Promise(r => setTimeout(r, 1000));
+        }
+      }
+    }
+
+    function disconnectAll() {
+      isPolling = false;
+      if (abortController) {
+        abortController.abort();
+        abortController = null;
+      }
+      if (ws) {
+        ws.close();
         ws = null;
-        if (event.code === 4401 || event.code === 1008) {
-          updateStatus('offline', 'Unauthorized: Wrong password');
-        } else {
-          updateStatus('offline', 'Disconnected (code ' + event.code + ')');
-        }
-      };
-
-      ws.onerror = (err) => {
-        console.error('[NODE] WebSocket error:', err);
-      };
+      }
+      updateStatus('offline', 'Disconnected');
     }
 
     function handleRfidScan(data) {

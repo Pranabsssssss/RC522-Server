@@ -26,6 +26,7 @@ const AUTH_PASSWORD = process.env.AUTH_PASSWORD || '00000000';
 // Active in-memory connections (Zero persistent storage)
 const connectedHosts = new Set();
 const connectedNodes = new Set();
+const waitingHttpClients = new Set();
 
 /**
  * Validate authorization credential
@@ -81,7 +82,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // HTTP POST /host endpoint (Allows pushing RFID scan via HTTP)
+  // HTTP POST /host endpoint (Allows pushing RFID scan via HTTP in JSON)
   if (pathname === '/host' && req.method === 'POST') {
     if (!isAuthorized(req, query.auth)) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -112,9 +113,72 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({
           success: true,
           action: result.action,
-          connectedNodes: connectedNodes.size,
+          connectedNodes: connectedNodes.size + waitingHttpClients.size,
           timestamp: new Date().toISOString()
         }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // HTTP GET /node endpoint (Long-polling JSON API)
+  if (pathname === '/node' && req.method === 'GET') {
+    if (!isAuthorized(req, query.auth)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized: Invalid auth credentials' }));
+      return;
+    }
+
+    if (query.wait === 'true' || query.poll === 'true') {
+      const entry = { res, timeoutId: null };
+      waitingHttpClients.add(entry);
+
+      entry.timeoutId = setTimeout(() => {
+        waitingHttpClients.delete(entry);
+        if (!res.writableEnded) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'timeout', message: 'No card scanned, re-poll' }));
+        }
+      }, 25000);
+      return;
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      endpoint: '/node',
+      status: 'ready',
+      connectedNodes: connectedNodes.size + waitingHttpClients.size,
+      activeHosts: connectedHosts.size
+    }));
+    return;
+  }
+
+  // HTTP POST /node endpoint (2-Way Commands from Node to Hosts)
+  if (pathname === '/node' && req.method === 'POST') {
+    if (!isAuthorized(req, query.auth)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized: Invalid auth credentials' }));
+      return;
+    }
+
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        let payload;
+        try { payload = JSON.parse(body); } catch { payload = { command: body.trim() }; }
+
+        let count = 0;
+        const msg = JSON.stringify({ type: 'node_message', data: payload, timestamp: Date.now() });
+        for (const h of connectedHosts) {
+          if (h.readyState === WebSocket.OPEN) { h.send(msg); count++; }
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, forwardedToHosts: count, data: payload }));
       } catch (err) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err.message }));
@@ -160,23 +224,41 @@ function routeRfidScan(uid, extraData = {}) {
   const timestamp = Date.now();
   const timeISO = new Date(timestamp).toISOString();
 
+  const totalNodes = connectedNodes.size + waitingHttpClients.size;
+
   // If no nodes are connected, drop the key immediately
-  if (connectedNodes.size === 0) {
+  if (totalNodes === 0) {
     console.log(`[RFID ${timeISO}] Scan received: UID=${uid} -> NO NODES CONNECTED. Dropping key.`);
     return { action: 'dropped', reason: 'no_nodes_connected', uid };
   }
 
   // Nodes are connected: route live with 0 latency
-  console.log(`[RFID ${timeISO}] Scan received: UID=${uid} -> Routing to ${connectedNodes.size} connected node(s).`);
-  const message = JSON.stringify({
+  console.log(`[RFID ${timeISO}] Scan received: UID=${uid} -> Routing to ${totalNodes} connected node(s).`);
+  const messageObj = {
     type: 'rfid',
     uid: uid,
     timestamp: timestamp,
     timeISO: timeISO,
     extra: extraData
-  });
+  };
+  const message = JSON.stringify(messageObj);
 
   let sentCount = 0;
+
+  // 1. Deliver to HTTP Long-polling clients
+  for (const client of waitingHttpClients) {
+    try {
+      clearTimeout(client.timeoutId);
+      if (!client.res.writableEnded) {
+        client.res.writeHead(200, { 'Content-Type': 'application/json' });
+        client.res.end(message);
+        sentCount++;
+      }
+    } catch {}
+  }
+  waitingHttpClients.clear();
+
+  // 2. Deliver to WebSocket clients
   for (const nodeSocket of connectedNodes) {
     if (nodeSocket.readyState === WebSocket.OPEN) {
       nodeSocket.send(message);
