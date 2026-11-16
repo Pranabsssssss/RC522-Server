@@ -330,6 +330,7 @@
 
   <script>
     let ws = null;
+    let eventSource = null;
     let scans = 0;
 
     // Auto-detect default host
@@ -372,25 +373,26 @@
     }
 
     function toggleConnection() {
-      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-        ws.close();
-        ws = null;
+      if (ws || eventSource) {
+        if (ws) { ws.close(); ws = null; }
+        if (eventSource) { eventSource.close(); eventSource = null; }
         updateStatus('offline', 'Disconnected');
         return;
       }
 
-      const host = document.getElementById('serverHost').value.trim() || 'rfid.pranab.space';
+      const host = document.getElementById('serverHost').value.trim() || window.location.host || 'rfid.pranab.space';
       const password = document.getElementById('authPassword').value.trim();
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const isHttps = window.location.protocol === 'https:';
+      const protocol = isHttps ? 'wss:' : 'ws:';
       const wsUrl = `${protocol}//${host}/node?auth=${encodeURIComponent(password)}`;
 
-      updateStatus('connecting', 'Connecting to /node...');
+      updateStatus('connecting', 'Connecting via WebSocket...');
 
       try {
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
-          updateStatus('online', 'Connected as Node (Live 0-Latency)');
+          updateStatus('online', 'Connected as Node (Live WebSocket)');
         };
 
         ws.onmessage = (event) => {
@@ -407,17 +409,55 @@
         };
 
         ws.onclose = () => {
-          updateStatus('offline', 'Disconnected');
+          const wasConnected = (ws && ws.readyState === WebSocket.OPEN);
           ws = null;
+          if (!eventSource) {
+            console.log('WebSocket closed, activating live stream fallback...');
+            startSse(host, password);
+          } else {
+            updateStatus('offline', 'Disconnected');
+          }
         };
 
         ws.onerror = (err) => {
-          console.error('WebSocket Error:', err);
-          updateStatus('offline', 'Connection Error / Unauthorized');
+          console.warn('WebSocket error, falling back to SSE stream...', err);
         };
       } catch (err) {
-        alert('Failed to connect: ' + err.message);
-        updateStatus('offline', 'Failed');
+        startSse(host, password);
+      }
+    }
+
+    function startSse(host, password) {
+      updateStatus('connecting', 'Connecting via Live Stream...');
+      const httpProto = window.location.protocol === 'https:' ? 'https:' : 'http:';
+      const sseUrl = `${httpProto}//${host}/node?stream=true&auth=${encodeURIComponent(password)}`;
+
+      try {
+        eventSource = new EventSource(sseUrl);
+
+        eventSource.onopen = () => {
+          updateStatus('online', 'Connected as Node (Live 0-Latency Stream)');
+        };
+
+        eventSource.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'rfid' && data.uid) {
+              handleRfidScan(data);
+            }
+          } catch (e) {}
+        };
+
+        eventSource.onerror = (err) => {
+          console.error('SSE Stream Error:', err);
+          updateStatus('offline', 'Connection Error / Unauthorized');
+          if (eventSource) {
+            eventSource.close();
+            eventSource = null;
+          }
+        };
+      } catch (e) {
+        updateStatus('offline', 'Failed: ' + e.message);
       }
     }
 

@@ -45,10 +45,13 @@ const char* WIFI_SSID     = "Excitel_Saini's 4G";
 const char* WIFI_PASSWORD = "00000000";
 
 // ---------------- Server Configuration -----------------
-// Server domain and authorization password
+// Set to "rfid.pranab.space" for Cloudflare Pages, or your PC local IP (e.g. "192.168.1.X")
 const char* SERVER_HOST   = "rfid.pranab.space";
-const uint16_t SERVER_PORT = 443; // Set to 443 for HTTPS/WSS (Cloudflare), or 80 for standard HTTP/WS
-const bool USE_SSL        = true; // True for WSS (Cloudflare Pages/Custom Domain)
+
+// For Cloudflare HTTPS/WSS: port 443 with USE_SSL = true
+// For Local Node.js server or plain HTTP: port 3000 (or 80) with USE_SSL = false
+const uint16_t SERVER_PORT = 443; 
+const bool USE_SSL        = true; 
 const char* AUTH_PASSWORD = "00000000";
 
 // Server endpoint path
