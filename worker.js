@@ -1,11 +1,11 @@
 /**
- * Cloudflare Pages Advanced Mode Universal Worker (_worker.js)
+ * Cloudflare Worker: RFID RC522 Live Relay Hub
  * 
- * Handles all routing for rfid.pranab.space:
- * - /host   : WebSocket & HTTP POST for ESP8266 NodeMCU RC522 reader
- * - /node   : WebSocket & SSE live stream for listening nodes/apps
+ * Works with Cloudflare Workers + Static Assets:
+ * - /host   : WebSocket & HTTP POST for ESP8266 NodeMCU RFID Reader
+ * - /node   : WebSocket & SSE Live Stream for Listening Nodes / Apps
  * - /health : Health check
- * - /       : Passes through to static public/index.html
+ * - *       : Serves static assets from public/ (index.html)
  */
 
 globalThis.rfidNodes = globalThis.rfidNodes || new Set();
@@ -49,7 +49,7 @@ export default {
     if (pathname === '/health' || pathname === '/status') {
       return new Response(JSON.stringify({
         status: 'online',
-        service: 'RFID RC522 Relay Hub',
+        service: 'RFID RC522 Relay Hub (Cloudflare Worker)',
         connectedNodes: globalThis.rfidNodes.size,
         connectedHosts: globalThis.rfidHosts.size,
         timestamp: new Date().toISOString()
@@ -200,7 +200,7 @@ export default {
         }
       }
 
-      // 3. HTTP GET in browser: Return friendly status instead of 404
+      // 3. HTTP GET: Return friendly status
       return new Response(JSON.stringify({
         endpoint: '/host',
         status: 'authorized',
@@ -319,7 +319,7 @@ export default {
     }
 
     // =========================================================================
-    // Static assets fallback (public/index.html, CSS, JS, etc.)
+    // Static assets fallback (serves public/index.html, etc.)
     // =========================================================================
     if (env.ASSETS && typeof env.ASSETS.fetch === 'function') {
       return env.ASSETS.fetch(request);

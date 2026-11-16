@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "build": "echo \"Build completed for Cloudflare Pages\"",
+    "deploy": "wrangler deploy",
+    "build": "echo \"Build completed\"",
     "test": "node test/node-client.js --local"
   },
   "repository": {
