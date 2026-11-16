@@ -7,10 +7,10 @@
  * - Only valid RFID keys/UIDs are allowed to be transferred.
  * - Server encrypts each RFID key into a 20-character discriminant string using AUTH_PASSWORD from .env.
  * - Deterministic: same card always produces the same unique 20-character key discriminant.
- * - NodeMCU scans the full hardware UID, and server performs the encryption before routing to nodes.
+ * - NodeMCU / ESP scans the full hardware UID, and server performs the encryption before routing to nodes.
  *
  * JSON APIs:
- * - POST /host?auth=xxx   : Host sends raw RFID UID as JSON: {"uid": "DB:23:03:07"}
+ * - POST /host?auth=xxx   : Host sends raw RFID UID as JSON: {"uid": "41:CC:69:06"}
  *                           Server validates, encrypts into 20-char key, routes to nodes.
  * - GET  /host?auth=xxx   : Host status JSON.
  * - GET  /node?auth=xxx&wait=true : Live Long-Polling JSON API. Waits for next card scan, returns JSON immediately.
@@ -36,15 +36,16 @@ function isValidRfidKey(str) {
 }
 
 /**
- * Encrypt each RFID key into a 20-character string discriminant using AUTH_PASSWORD from .env
+ * Encrypt each RFID key into a 20-character string discriminant using AUTH_PASSWORD
  * Uses HMAC-SHA256 keyed hash for deterministic, secure 20-character pseudonymization.
  */
-async function encryptRfidKey(rawUid, password) {
-  const cleanUid = rawUid.toUpperCase().trim();
+async function encryptRfidKey(rawUid, password = '00000000') {
+  const secret = (password && typeof password === 'string' && password.length > 0) ? password : '00000000';
+  const cleanUid = String(rawUid).toUpperCase().trim();
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey(
     'raw',
-    enc.encode(password),
+    enc.encode(secret),
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     ['sign']
@@ -109,7 +110,7 @@ export class RfidRelayHub {
   async _handleHost(request, password) {
     const upgrade = request.headers.get('Upgrade');
 
-    // 1. WebSocket Upgrade from NodeMCU
+    // 1. WebSocket Upgrade from NodeMCU / ESP
     if (upgrade && upgrade.toLowerCase() === 'websocket') {
       const pair = new WebSocketPair();
       const client = pair[0];
@@ -120,6 +121,11 @@ export class RfidRelayHub {
       } else {
         server.accept();
         this.hosts.add(server);
+        server.addEventListener('message', async (evt) => {
+          await this.webSocketMessage(server, evt.data);
+        });
+        server.addEventListener('close', () => { this.hosts.delete(server); });
+        server.addEventListener('error', () => { this.hosts.delete(server); });
       }
 
       this._safeSend(server, {
@@ -128,16 +134,10 @@ export class RfidRelayHub {
         connectedNodes: this._getNodeCount()
       });
 
-      server.addEventListener('message', async (evt) => {
-        await this.webSocketMessage(server, evt.data, password);
-      });
-      server.addEventListener('close', () => { this.hosts.delete(server); });
-      server.addEventListener('error', () => { this.hosts.delete(server); });
-
       return new Response(null, { status: 101, webSocket: client });
     }
 
-    // 2. HTTP POST from NodeMCU (JSON API)
+    // 2. HTTP POST from ESP / NodeMCU (JSON API)
     if (request.method === 'POST') {
       try {
         const bodyText = await request.text();
@@ -208,6 +208,11 @@ export class RfidRelayHub {
       } else {
         server.accept();
         this.nodes.add(server);
+        server.addEventListener('message', async (evt) => {
+          await this.webSocketMessage(server, evt.data);
+        });
+        server.addEventListener('close', () => { this.nodes.delete(server); });
+        server.addEventListener('error', () => { this.nodes.delete(server); });
       }
 
       this._safeSend(server, {
@@ -216,12 +221,6 @@ export class RfidRelayHub {
         message: 'Connected as live listening node (0 latency)',
         hostsActive: this._getHostCount()
       });
-
-      server.addEventListener('message', async (evt) => {
-        await this.webSocketMessage(server, evt.data, (this.env && this.env.AUTH_PASSWORD) || '00000000');
-      });
-      server.addEventListener('close', () => { this.nodes.delete(server); });
-      server.addEventListener('error', () => { this.nodes.delete(server); });
 
       return new Response(null, { status: 101, webSocket: client });
     }
@@ -311,10 +310,11 @@ export class RfidRelayHub {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // WEBSOCKET MESSAGE HANDLER
+  // WEBSOCKET MESSAGE HANDLER (Invoked by Cloudflare Hibernation)
   // ═══════════════════════════════════════════════════════════════
-  async webSocketMessage(ws, message, password) {
+  async webSocketMessage(ws, message) {
     try {
+      const password = (this.env && this.env.AUTH_PASSWORD) || '00000000';
       const text = typeof message === 'string' ? message : new TextDecoder().decode(message);
       let payload;
       try {
@@ -345,11 +345,13 @@ export class RfidRelayHub {
           reason: routed > 0 ? undefined : 'no_nodes_connected',
           nodes: routed,
           rawUid: rawUid,
-          encryptedKey: encryptedKey
+          encryptedKey: encryptedKey,
+          discriminant: encryptedKey
         });
         return;
       }
 
+      // If it's a 2-way command from node, forward to hosts
       this._forwardToHosts(payload);
     } catch (err) {
       console.error('WS Message error:', err);
@@ -385,6 +387,7 @@ export class RfidRelayHub {
     const scanStr = JSON.stringify(scanJson);
 
     let deliveredCount = 0;
+    const sentSet = new Set();
 
     // 1. Deliver to HTTP Long-Polling waiting nodes
     for (const entry of this.waitingHttpNodes) {
@@ -398,9 +401,11 @@ export class RfidRelayHub {
 
     // 2. Deliver to WebSockets via Hibernation API
     if (this.ctx && typeof this.ctx.getWebSockets === 'function') {
-      for (const ws of this.ctx.getWebSockets('node')) {
+      const hibernatedNodes = this.ctx.getWebSockets('node');
+      for (const ws of hibernatedNodes) {
         try {
           ws.send(scanStr);
+          sentSet.add(ws);
           deliveredCount++;
         } catch {}
       }
@@ -408,11 +413,14 @@ export class RfidRelayHub {
 
     // 3. Deliver to manual WebSockets / SSE
     for (const node of this.nodes) {
-      try {
-        node.send(scanStr);
-        deliveredCount++;
-      } catch {
-        this.nodes.delete(node);
+      if (!sentSet.has(node)) {
+        try {
+          node.send(scanStr);
+          sentSet.add(node);
+          deliveredCount++;
+        } catch {
+          this.nodes.delete(node);
+        }
       }
     }
 
@@ -427,31 +435,56 @@ export class RfidRelayHub {
     });
 
     let count = 0;
+    const sentSet = new Set();
+
     if (this.ctx && typeof this.ctx.getWebSockets === 'function') {
       for (const host of this.ctx.getWebSockets('host')) {
-        try { host.send(msgStr); count++; } catch {}
+        try {
+          host.send(msgStr);
+          sentSet.add(host);
+          count++;
+        } catch {}
       }
     }
+
     for (const host of this.hosts) {
-      try { host.send(msgStr); count++; } catch { this.hosts.delete(host); }
+      if (!sentSet.has(host)) {
+        try {
+          host.send(msgStr);
+          sentSet.add(host);
+          count++;
+        } catch {
+          this.hosts.delete(host);
+        }
+      }
     }
     return count;
   }
 
   _getNodeCount() {
-    let count = this.nodes.size + this.waitingHttpNodes.size;
+    const unique = new Set();
     if (this.ctx && typeof this.ctx.getWebSockets === 'function') {
-      count += this.ctx.getWebSockets('node').length;
+      for (const ws of this.ctx.getWebSockets('node')) {
+        unique.add(ws);
+      }
     }
-    return count;
+    for (const ws of this.nodes) {
+      unique.add(ws);
+    }
+    return unique.size + this.waitingHttpNodes.size;
   }
 
   _getHostCount() {
-    let count = this.hosts.size;
+    const unique = new Set();
     if (this.ctx && typeof this.ctx.getWebSockets === 'function') {
-      count += this.ctx.getWebSockets('host').length;
+      for (const ws of this.ctx.getWebSockets('host')) {
+        unique.add(ws);
+      }
     }
-    return count;
+    for (const ws of this.hosts) {
+      unique.add(ws);
+    }
+    return unique.size;
   }
 
   _safeSend(ws, obj) {

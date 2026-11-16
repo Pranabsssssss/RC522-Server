@@ -286,7 +286,7 @@
         </div>
         <div>
           <label for="authPassword">Authorization Password</label>
-          <input type="password" id="authPassword" placeholder="Enter authorization password" value="">
+          <input type="password" id="authPassword" placeholder="Enter authorization password" value="00000000" autocomplete="off">
         </div>
         <div>
           <button id="toggleBtn" onclick="toggleConnection()">Connect as Node</button>
@@ -404,7 +404,11 @@
           try {
             const data = JSON.parse(event.data);
             console.log('[NODE] Message received:', data);
-            if (data.type === 'rfid' && data.uid) {
+            if (data.type === 'welcome') {
+              updateStatus('online', `Connected as Node (${data.hostsActive || 0} ESP reader online)`);
+              return;
+            }
+            if (data.type === 'rfid' && (data.uid || data.encryptedKey || data.discriminant)) {
               handleRfidScan(data);
             }
           } catch (e) {
@@ -452,7 +456,7 @@
           }
 
           const data = await res.json();
-          if (data && data.type === 'rfid' && data.uid) {
+          if (data && data.type === 'rfid' && (data.uid || data.encryptedKey || data.discriminant)) {
             handleRfidScan(data);
           }
         } catch (err) {

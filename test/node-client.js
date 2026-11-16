@@ -63,7 +63,7 @@ function connectWs() {
 
         if (msg.type === 'welcome') {
           console.log(`\x1b[36m[SERVER WELCOME]\x1b[0m ${msg.message}`);
-          console.log(`[HOSTS ACTIVE] ${msg.hostsActive || 0} ESP8266 reader(s) currently online.\n`);
+          console.log(`[HOSTS ACTIVE] ${msg.hostsActive || 0} ESP reader(s) currently online.\n`);
           return;
         }
 

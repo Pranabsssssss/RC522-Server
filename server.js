@@ -379,8 +379,11 @@ wssHost.on('connection', (ws, req) => {
         ws.send(JSON.stringify({
           type: 'ack',
           uid: uid,
+          rawUid: uid,
+          encryptedKey: routeResult.encryptedKey,
+          discriminant: routeResult.encryptedKey,
           status: routeResult.action,
-          nodes: connectedNodes.size
+          nodes: connectedNodes.size + waitingHttpClients.size
         }));
       }
     } catch (err) {
