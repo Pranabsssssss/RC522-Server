@@ -185,5 +185,14 @@ export async function onRequest(context) {
     }
   }
 
-  return new Response('Method not allowed or expected WebSocket', { status: 400 });
+  // HTTP GET: Return friendly endpoint status
+  return new Response(JSON.stringify({
+    endpoint: '/host',
+    status: 'authorized',
+    message: 'Host endpoint is active. Connect via WebSocket or send HTTP POST with RFID UID.',
+    connectedNodes: globalThis.rfidNodes.size
+  }, null, 2), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+  });
 }
