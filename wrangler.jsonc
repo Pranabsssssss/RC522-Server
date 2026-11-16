@@ -6,6 +6,22 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "RELAY_HUB",
+        "class_name": "RfidRelayHub"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "RfidRelayHub"
+      ]
+    }
+  ],
   "observability": {
     "enabled": true
   },
