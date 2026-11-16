@@ -190,6 +190,7 @@ void transmitRfid(String uid) {
       String url;
 
       if (USE_SSL) {
+        clientSecure.setBufferSizes(512, 512); // CRITICAL: Reduces SSL buffer from 32KB to 1KB to fit in ESP8266 RAM
         clientSecure.setInsecure(); // Cloudflare SSL certificate verification
         url = String("https://") + SERVER_HOST + hostPath;
         http.begin(clientSecure, url);
