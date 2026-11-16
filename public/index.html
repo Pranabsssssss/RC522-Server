@@ -479,8 +479,11 @@
       scans++;
       playBeep();
 
+      const encKey = data.encryptedKey || data.discriminant || data.uid;
+      const rawUid = data.rawUid || data.uid;
+
       document.getElementById('scanCount').innerText = scans;
-      document.getElementById('lastUid').innerText = data.uid;
+      document.getElementById('lastUid').innerText = encKey;
 
       if (data.timestamp) {
         const latency = Date.now() - data.timestamp;
@@ -499,8 +502,9 @@
 
       item.innerHTML = `
         <div>
-          <span style="font-size:0.75rem; color:#94a3b8; display:block;">CARD SCANNED</span>
-          <span class="scan-uid">${escapeHtml(data.uid)}</span>
+          <span style="font-size:0.72rem; color:#94a3b8; display:block; letter-spacing:0.05em;">20-CHAR ENCRYPTED DISCRIMINANT</span>
+          <span class="scan-uid" style="color:#38bdf8; font-size:1.15rem;">${escapeHtml(encKey)}</span>
+          <span style="font-size:0.75rem; color:#64748b; display:block; margin-top:2px;">Raw Scanned UID: <code style="color:#10b981;">${escapeHtml(rawUid)}</code></span>
         </div>
         <div class="scan-time">${timeStr}</div>
       `;

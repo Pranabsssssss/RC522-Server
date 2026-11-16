@@ -17,6 +17,7 @@ const http = require('http');
 const url = require('url');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { WebSocketServer, WebSocket } = require('ws');
 
 const PORT = process.env.PORT || 3000;
@@ -27,6 +28,25 @@ const AUTH_PASSWORD = process.env.AUTH_PASSWORD || '00000000';
 const connectedHosts = new Set();
 const connectedNodes = new Set();
 const waitingHttpClients = new Set();
+
+/**
+ * Validate strictly: only valid RFID keys are allowed
+ */
+function isValidRfidKey(str) {
+  if (typeof str !== 'string') return false;
+  const trimmed = str.trim();
+  if (/^([0-9A-Fa-f]{2}[:-]){3,9}[0-9A-Fa-f]{2}$/.test(trimmed)) return true;
+  if (/^[0-9A-Fa-f]{8,20}$/.test(trimmed) && trimmed.length % 2 === 0) return true;
+  return false;
+}
+
+/**
+ * Encrypt each RFID key into a 20-character string discriminant using AUTH_PASSWORD from .env
+ */
+function encryptRfidKey(rawUid, password) {
+  const cleanUid = rawUid.toUpperCase().trim();
+  return crypto.createHmac('sha256', password).update(cleanUid).digest('hex').substring(0, 20).toUpperCase();
+}
 
 /**
  * Validate authorization credential
@@ -101,19 +121,29 @@ const server = http.createServer((req, res) => {
           payload = { uid: body.trim() };
         }
 
-        const uid = payload.uid || payload.rfid || payload.tag;
-        if (!uid) {
+        const rawUid = payload.uid || payload.rfid || payload.tag;
+        if (!rawUid) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Missing RFID UID in payload' }));
           return;
         }
 
-        const result = routeRfidScan(uid, payload);
+        if (!isValidRfidKey(rawUid)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid RFID key format. Only valid RFID keys are allowed.' }));
+          return;
+        }
+
+        const result = routeRfidScan(rawUid, payload);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           success: true,
           action: result.action,
           connectedNodes: connectedNodes.size + waitingHttpClients.size,
+          rawUid: rawUid,
+          encryptedKey: result.encryptedKey,
+          discriminant: result.encryptedKey,
+          length: result.encryptedKey.length,
           timestamp: new Date().toISOString()
         }));
       } catch (err) {
@@ -220,23 +250,28 @@ const server = http.createServer((req, res) => {
 /**
  * Route an incoming RFID scan from Host to connected Nodes
  */
-function routeRfidScan(uid, extraData = {}) {
+function routeRfidScan(rawUid, extraData = {}) {
   const timestamp = Date.now();
   const timeISO = new Date(timestamp).toISOString();
-
   const totalNodes = connectedNodes.size + waitingHttpClients.size;
+
+  // Encrypt raw RFID key into 20-character discriminant
+  const encryptedKey = encryptRfidKey(rawUid, AUTH_PASSWORD);
 
   // If no nodes are connected, drop the key immediately
   if (totalNodes === 0) {
-    console.log(`[RFID ${timeISO}] Scan received: UID=${uid} -> NO NODES CONNECTED. Dropping key.`);
-    return { action: 'dropped', reason: 'no_nodes_connected', uid };
+    console.log(`[RFID ${timeISO}] Key received: ${rawUid} -> Encrypted: ${encryptedKey} -> NO NODES CONNECTED. Dropping.`);
+    return { action: 'dropped', reason: 'no_nodes_connected', rawUid, encryptedKey };
   }
 
-  // Nodes are connected: route live with 0 latency
-  console.log(`[RFID ${timeISO}] Scan received: UID=${uid} -> Routing to ${totalNodes} connected node(s).`);
+  console.log(`[RFID ${timeISO}] Key received: ${rawUid} -> Encrypted: ${encryptedKey} -> Routing to ${totalNodes} node(s).`);
   const messageObj = {
     type: 'rfid',
-    uid: uid,
+    discriminant: encryptedKey,
+    encryptedKey: encryptedKey,
+    uid: encryptedKey, // Primary 20-char encrypted discriminant
+    rawUid: rawUid,
+    length: encryptedKey.length,
     timestamp: timestamp,
     timeISO: timeISO,
     extra: extraData
@@ -266,7 +301,7 @@ function routeRfidScan(uid, extraData = {}) {
     }
   }
 
-  return { action: 'routed', nodesCount: sentCount, uid };
+  return { action: 'routed', nodesCount: sentCount, rawUid, encryptedKey };
 }
 
 /**

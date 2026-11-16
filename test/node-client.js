@@ -67,8 +67,8 @@ function connectWs() {
           return;
         }
 
-        if (msg.type === 'rfid' && msg.uid) {
-          displayRfidScan(msg.uid, msg.timestamp);
+        if (msg.type === 'rfid' && (msg.uid || msg.encryptedKey)) {
+          displayRfidScan(msg);
           return;
         }
 
@@ -113,8 +113,8 @@ async function startHttpPolling() {
         break;
       }
 
-      if (data && data.type === 'rfid' && data.uid) {
-        displayRfidScan(data.uid, data.timestamp);
+      if (data && data.type === 'rfid' && (data.uid || data.encryptedKey)) {
+        displayRfidScan(data);
       }
     } catch (err) {
       // Re-poll on timeout or transient drop
@@ -148,19 +148,22 @@ function fetchJson(urlStr) {
   });
 }
 
-function displayRfidScan(uid, timestamp) {
+function displayRfidScan(data) {
   scansReceived++;
   const now = new Date();
-  const latency = timestamp ? `${Math.max(0, Date.now() - timestamp)}ms` : 'instant';
+  const encKey = data.encryptedKey || data.discriminant || data.uid;
+  const rawUid = data.rawUid || 'N/A';
+  const latency = data.timestamp ? `${Math.max(0, Date.now() - data.timestamp)}ms` : 'instant';
 
   // Terminal bell
   process.stdout.write('\x07');
 
   console.log('┌────────────────────────────────────────────────────────┐');
   console.log(`│ \x1b[33m⚡ RFID CARD SCANNED\x1b[0m (#${scansReceived})                           │`);
-  console.log(`│   UID       : \x1b[32m\x1b[1m${uid.padEnd(20)}\x1b[0m                 │`);
-  console.log(`│   Time      : ${now.toLocaleTimeString().padEnd(20)}                 │`);
-  console.log(`│   Stream Lat: ${latency.padEnd(20)}                 │`);
+  console.log(`│   Encrypted Key: \x1b[32m\x1b[1m${encKey.padEnd(20)}\x1b[0m            │`);
+  console.log(`│   Raw Card UID : \x1b[36m${rawUid.padEnd(20)}\x1b[0m            │`);
+  console.log(`│   Time         : ${now.toLocaleTimeString().padEnd(20)}            │`);
+  console.log(`│   Stream Lat   : ${latency.padEnd(20)}            │`);
   console.log('└────────────────────────────────────────────────────────┘\n');
 }
 
