@@ -1,0 +1,28 @@
+{
+  "name": "rc522-server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "build": "echo \"Build completed for Cloudflare Pages\"",
+    "test": "node test/node-client.js --local"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Pranabsssssss/RC522-Server.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Pranabsssssss/RC522-Server/issues"
+  },
+  "homepage": "https://github.com/Pranabsssssss/RC522-Server#readme",
+  "dependencies": {
+    "dotenv": "^18.0.10",
+    "ws": "^8.23.0"
+  }
+}

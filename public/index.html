@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RFID RC522 Real-time Relay Monitor</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --border: #334155;
+      --primary: #38bdf8;
+      --primary-hover: #0ea5e9;
+      --accent: #10b981;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1rem;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 800px;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    header {
+      text-align: center;
+    }
+
+    h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, #38bdf8, #818cf8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 0.5rem;
+    }
+
+    p.subtitle {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+    }
+
+    .connection-panel {
+      display: grid;
+      grid-template-columns: 1fr 1fr auto;
+      gap: 1rem;
+      align-items: end;
+    }
+
+    @media (max-width: 640px) {
+      .connection-panel {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    label {
+      display: block;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-bottom: 0.4rem;
+    }
+
+    input {
+      width: 100%;
+      background: #0b1120;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 0.65rem 0.85rem;
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    input:focus {
+      border-color: var(--primary);
+    }
+
+    button {
+      background: var(--primary);
+      color: #0f172a;
+      font-weight: 600;
+      border: none;
+      border-radius: 8px;
+      padding: 0.7rem 1.25rem;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+
+    button:hover {
+      background: var(--primary-hover);
+    }
+
+    button:active {
+      transform: scale(0.98);
+    }
+
+    button.disconnect {
+      background: var(--danger);
+      color: #fff;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.35rem 0.85rem;
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-top: 0.5rem;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .status-offline {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--danger);
+    }
+
+    .status-online {
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--accent);
+    }
+
+    .status-connecting {
+      background: rgba(245, 158, 11, 0.15);
+      color: var(--warning);
+    }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+
+    .stat-box {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      text-align: center;
+    }
+
+    .stat-val {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--primary);
+    }
+
+    .stat-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.2rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .scan-log {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      max-height: 400px;
+      overflow-y: auto;
+      margin-top: 1rem;
+    }
+
+    .scan-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #0b1120;
+      border-left: 4px solid var(--accent);
+      border-radius: 6px;
+      padding: 0.85rem 1rem;
+      animation: slideIn 0.3s ease-out;
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateY(-8px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .scan-uid {
+      font-family: monospace;
+      font-size: 1.1rem;
+      font-weight: bold;
+      color: #38bdf8;
+      letter-spacing: 0.05em;
+    }
+
+    .scan-time {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 2.5rem;
+      color: var(--text-muted);
+      font-style: italic;
+    }
+
+    .tools {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .sim-button {
+      background: #334155;
+      color: var(--text);
+      font-size: 0.85rem;
+      padding: 0.5rem 1rem;
+    }
+
+    .sim-button:hover {
+      background: #475569;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>RFID RC522 Relay Hub</h1>
+      <p class="subtitle">Live 0-latency stream router connecting NodeMCU RC522 to listening nodes</p>
+      <div id="statusBadge" class="status-badge status-offline">
+        <span class="status-dot"></span>
+        <span id="statusText">Disconnected</span>
+      </div>
+    </header>
+
+    <div class="card">
+      <div class="connection-panel">
+        <div>
+          <label for="serverHost">Server Domain / Host</label>
+          <input type="text" id="serverHost" placeholder="e.g. rfid.pranab.space" value="">
+        </div>
+        <div>
+          <label for="authPassword">Authorization Password</label>
+          <input type="password" id="authPassword" placeholder="Password from .env" value="00000000">
+        </div>
+        <div>
+          <button id="toggleBtn" onclick="toggleConnection()">Connect as Node</button>
+        </div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-box">
+          <div class="stat-val" id="scanCount">0</div>
+          <div class="stat-label">Scans Received</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-val" id="lastUid">--</div>
+          <div class="stat-label">Last RFID Key</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-val" id="latencyStat">0 ms</div>
+          <div class="stat-label">Live Stream Latency</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h2 style="font-size: 1.15rem; font-weight: 600;">Live RFID Scans Feed</h2>
+        <span style="font-size: 0.8rem; color: var(--text-muted);">Zero persistence &bull; In-memory routing only</span>
+      </div>
+
+      <div class="scan-log" id="scanLog">
+        <div class="empty-state" id="emptyState">
+          Waiting for RFID cards to be scanned on NodeMCU RC522...
+        </div>
+      </div>
+
+      <div class="tools">
+        <span style="font-size: 0.8rem; color: var(--text-muted);">Simulate Host Scan:</span>
+        <button class="sim-button" onclick="simulateScan()">Send Test RFID Scan</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let ws = null;
+    let scans = 0;
+
+    // Auto-detect default host
+    const defaultHost = window.location.host || 'rfid.pranab.space';
+    document.getElementById('serverHost').value = defaultHost;
+
+    function playBeep() {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.value = 880; // A5 note
+        gain.gain.setValueAtTime(0.2, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.15);
+      } catch (e) {}
+    }
+
+    function updateStatus(state, msg) {
+      const badge = document.getElementById('statusBadge');
+      const text = document.getElementById('statusText');
+      const btn = document.getElementById('toggleBtn');
+
+      badge.className = 'status-badge status-' + state;
+      text.innerText = msg;
+
+      if (state === 'online') {
+        btn.innerText = 'Disconnect Node';
+        btn.className = 'disconnect';
+      } else if (state === 'connecting') {
+        btn.innerText = 'Connecting...';
+        btn.className = '';
+      } else {
+        btn.innerText = 'Connect as Node';
+        btn.className = '';
+      }
+    }
+
+    function toggleConnection() {
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        ws.close();
+        ws = null;
+        updateStatus('offline', 'Disconnected');
+        return;
+      }
+
+      const host = document.getElementById('serverHost').value.trim() || 'rfid.pranab.space';
+      const password = document.getElementById('authPassword').value.trim();
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${host}/node?auth=${encodeURIComponent(password)}`;
+
+      updateStatus('connecting', 'Connecting to /node...');
+
+      try {
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          updateStatus('online', 'Connected as Node (Live 0-Latency)');
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'rfid' && data.uid) {
+              handleRfidScan(data);
+            } else if (data.type === 'welcome') {
+              console.log('Server welcome:', data);
+            }
+          } catch (e) {
+            console.log('Message received:', event.data);
+          }
+        };
+
+        ws.onclose = () => {
+          updateStatus('offline', 'Disconnected');
+          ws = null;
+        };
+
+        ws.onerror = (err) => {
+          console.error('WebSocket Error:', err);
+          updateStatus('offline', 'Connection Error / Unauthorized');
+        };
+      } catch (err) {
+        alert('Failed to connect: ' + err.message);
+        updateStatus('offline', 'Failed');
+      }
+    }
+
+    function handleRfidScan(data) {
+      scans++;
+      playBeep();
+
+      document.getElementById('scanCount').innerText = scans;
+      document.getElementById('lastUid').innerText = data.uid;
+
+      if (data.timestamp) {
+        const latency = Date.now() - data.timestamp;
+        document.getElementById('latencyStat').innerText = `${Math.max(0, latency)} ms`;
+      }
+
+      const empty = document.getElementById('emptyState');
+      if (empty) empty.style.display = 'none';
+
+      const scanLog = document.getElementById('scanLog');
+      const item = document.createElement('div');
+      item.className = 'scan-item';
+      
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString();
+
+      item.innerHTML = `
+        <div>
+          <span style="font-size:0.75rem; color:#94a3b8; display:block;">CARD SCANNED</span>
+          <span class="scan-uid">${escapeHtml(data.uid)}</span>
+        </div>
+        <div class="scan-time">${timeStr}</div>
+      `;
+
+      scanLog.prepend(item);
+    }
+
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>"']/g, (m) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[m]));
+    }
+
+    function simulateScan() {
+      const mockUids = ['E2:49:10:8B', 'A4:1F:B9:32', '7C:8A:22:90', '1B:6F:04:D8', 'F3:C8:51:7A'];
+      const randomUid = mockUids[Math.floor(Math.random() * mockUids.length)];
+      const host = document.getElementById('serverHost').value.trim() || 'rfid.pranab.space';
+      const password = document.getElementById('authPassword').value.trim();
+      const proto = window.location.protocol.startsWith('https') ? 'https:' : 'http:';
+
+      fetch(`${proto}//${host}/host?auth=${encodeURIComponent(password)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid: randomUid, simulated: true })
+      })
+      .then(r => r.json())
+      .then(res => {
+        console.log('Simulated scan posted:', res);
+      })
+      .catch(err => {
+        console.warn('Simulation post failed:', err);
+      });
+    }
+
+    // Auto-connect if on same domain
+    if (window.location.host) {
+      setTimeout(() => { toggleConnection(); }, 500);
+    }
+  </script>
+</body>
+</html>
