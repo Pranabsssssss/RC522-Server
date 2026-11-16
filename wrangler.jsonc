@@ -3,8 +3,19 @@
   "name": "rc522-server",
   "main": "worker.js",
   "compatibility_date": "2026-11-16",
-  "compatibility_flags": [
-    "nodejs_compat"
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "directory": "public",
+    "binding": "ASSETS"
+  },
+  "routes": [
+    {
+      "pattern": "rfid.pranab.space/*",
+      "zone_name": "pranab.space"
+    }
   ],
   "durable_objects": {
     "bindings": [
@@ -17,16 +28,7 @@
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": [
-        "RfidRelayHub"
-      ]
+      "new_sqlite_classes": ["RfidRelayHub"]
     }
-  ],
-  "observability": {
-    "enabled": true
-  },
-  "assets": {
-    "directory": "public",
-    "binding": "ASSETS"
-  }
+  ]
 }

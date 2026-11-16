@@ -330,7 +330,6 @@
 
   <script>
     let ws = null;
-    let eventSource = null;
     let scans = 0;
 
     // Auto-detect default host
@@ -373,56 +372,59 @@
     }
 
     function toggleConnection() {
-      if (ws || eventSource) {
-        if (ws) { ws.close(); ws = null; }
-        if (eventSource) { eventSource.close(); eventSource = null; }
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        ws.close();
+        ws = null;
         updateStatus('offline', 'Disconnected');
         return;
       }
 
       const host = document.getElementById('serverHost').value.trim() || window.location.host || 'rfid.pranab.space';
       const password = document.getElementById('authPassword').value.trim();
-      const isHttps = window.location.protocol === 'https:';
-      const protocol = isHttps ? 'wss:' : 'ws:';
+      if (!password) {
+        updateStatus('offline', 'Enter the authorization password first');
+        return;
+      }
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = `${protocol}//${host}/node?auth=${encodeURIComponent(password)}`;
 
-      updateStatus('connecting', 'Connecting via WebSocket...');
+      console.log('[NODE] Connecting to:', wsUrl);
+      updateStatus('connecting', 'Connecting...');
 
-      try {
-        ws = new WebSocket(wsUrl);
+      ws = new WebSocket(wsUrl);
 
-        ws.onopen = () => {
-          updateStatus('online', 'Connected as Node (Live WebSocket)');
-        };
+      ws.onopen = () => {
+        console.log('[NODE] WebSocket open!');
+        updateStatus('online', 'Connected as Node (Live 0-Latency)');
+      };
 
-        ws.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            if (data.type === 'rfid' && data.uid) {
-              handleRfidScan(data);
-            } else if (data.type === 'welcome') {
-              console.log('Server welcome:', data);
-            }
-          } catch (e) {
-            console.log('Message received:', event.data);
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          console.log('[NODE] Message:', data);
+          if (data.type === 'rfid' && data.uid) {
+            handleRfidScan(data);
+          } else if (data.type === 'welcome') {
+            console.log('[NODE] Server welcome:', data);
           }
-        };
+        } catch (e) {
+          console.log('[NODE] Raw:', event.data);
+        }
+      };
 
-        ws.onclose = (event) => {
-          ws = null;
-          if (event.code === 4401 || event.code === 1008) {
-            updateStatus('offline', 'Unauthorized: Invalid Password');
-          } else {
-            updateStatus('offline', 'Disconnected');
-          }
-        };
+      ws.onclose = (event) => {
+        console.log('[NODE] WebSocket closed. Code:', event.code, 'Reason:', event.reason);
+        ws = null;
+        if (event.code === 4401 || event.code === 1008) {
+          updateStatus('offline', 'Unauthorized: Wrong password');
+        } else {
+          updateStatus('offline', 'Disconnected (code ' + event.code + ')');
+        }
+      };
 
-        ws.onerror = (err) => {
-          console.warn('WebSocket error:', err);
-        };
-      } catch (err) {
-        updateStatus('offline', 'Failed: ' + err.message);
-      }
+      ws.onerror = (err) => {
+        console.error('[NODE] WebSocket error:', err);
+      };
     }
 
     function handleRfidScan(data) {
@@ -485,10 +487,7 @@
       });
     }
 
-    // Auto-connect if on same domain
-    if (window.location.host) {
-      setTimeout(() => { toggleConnection(); }, 500);
-    }
+    // Don't auto-connect; wait for user to click
   </script>
 </body>
 </html>
