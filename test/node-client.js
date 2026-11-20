@@ -1,11 +1,4 @@
-/**
- * RFID Live Listener Node Client (Dual Mode: WebSocket + HTTP JSON API)
- * 
- * Usage:
- *   node test/node-client.js
- *   node test/node-client.js --local
- *   node test/node-client.js --host rfid.pranab.space --auth 00000000
- */
+
 
 require('dotenv').config();
 const { WebSocket } = require('ws');
@@ -13,7 +6,6 @@ const http = require('http');
 const https = require('https');
 const readline = require('readline');
 
-// Parse CLI flags
 const args = process.argv.slice(2);
 const isLocal = args.includes('--local');
 let customHost = null;
@@ -24,8 +16,12 @@ for (let i = 0; i < args.length; i++) {
   if (args[i] === '--auth' && args[i + 1]) customAuth = args[i + 1];
 }
 
-const AUTH_PASSWORD = customAuth || process.env.AUTH_PASSWORD || '00000000';
-const DEFAULT_HOST = isLocal ? 'localhost:3000' : 'rfid.pranab.space';
+const AUTH_PASSWORD = customAuth || process.env.AUTH_PASSWORD;
+const DEFAULT_HOST = isLocal ? 'localhost:3000' : 'localhost:3000';
+if (!AUTH_PASSWORD) {
+  console.error('AUTH_PASSWORD is required. Set it in .env or pass --auth.');
+  process.exit(1);
+}
 const TARGET_HOST = customHost || DEFAULT_HOST;
 const isHttps = !TARGET_HOST.includes('localhost') && !TARGET_HOST.includes('127.0.0.1');
 const PROTOCOL = isHttps ? 'wss' : 'ws';
@@ -117,7 +113,6 @@ async function startHttpPolling() {
         displayRfidScan(data);
       }
     } catch (err) {
-      // Re-poll on timeout or transient drop
       await new Promise(r => setTimeout(r, 1000));
     }
   }
@@ -155,7 +150,6 @@ function displayRfidScan(data) {
   const rawUid = data.rawUid || 'N/A';
   const latency = data.timestamp ? `${Math.max(0, Date.now() - data.timestamp)}ms` : 'instant';
 
-  // Terminal bell
   process.stdout.write('\x07');
 
   console.log('┌────────────────────────────────────────────────────────┐');
@@ -167,7 +161,6 @@ function displayRfidScan(data) {
   console.log('└────────────────────────────────────────────────────────┘\n');
 }
 
-// Setup interactive CLI input for 2-way data transfer back to NodeMCU
 const rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout,
@@ -180,7 +173,6 @@ rl.on('line', async (line) => {
 
   console.log(`[SENDING 2-WAY COMMAND] "${trimmed}"...`);
 
-  // Send via HTTP POST in JSON format
   try {
     const postUrl = `${HTTP_PROTOCOL}://${TARGET_HOST}/node?auth=${encodeURIComponent(AUTH_PASSWORD)}`;
     const parsed = new URL(postUrl);

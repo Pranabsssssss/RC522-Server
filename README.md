@@ -1,221 +1,252 @@
-# RFID RC522 Real-time Relay Server & AI Agent API
+# RC522 Relay Server
 
-A high-performance, **zero-latency**, **zero-persistence** relay server connecting an **ESP8266 / ESP32 NodeMCU + RC522 RFID reader** (`/host`) to listening applications, dashboards, and **autonomous AI agents** (`/node`).
+RC522 Relay Server is a self-hostable event hub for RC522 RFID readers on ESP8266 and ESP32 boards. Readers publish card scans through WebSocket or HTTP, and applications receive the event through WebSocket, server-sent events, or HTTP long polling. The server can also relay commands back to connected readers.
 
-All scanned RFID keys are deterministically encrypted into an exact **20-character discriminant key** using `AUTH_PASSWORD` on the server before distribution.
+It is suitable for access-control demos, attendance systems, inventory tracking, kiosk experiences, automation, and other RFID projects.
 
----
+## Features
 
-## 🤖 AI Agent Integration Guide
+- ESP8266 and ESP32 firmware for NodeMCU-class boards
+- RC522 reader support
+- WebSocket and HTTP scan ingestion
+- WebSocket, SSE, and HTTP long-polling listeners
+- Bidirectional node-to-reader commands
+- Deterministic 20-character HMAC-SHA256 RFID discriminants
+- In-memory routing with no database or log persistence
+- Optional Cloudflare Worker and Durable Object deployment
+- Browser dashboard and reusable Node.js listener
 
-AI agents can directly integrate with the RFID Relay API as an event listener or tool. The API requires zero complex SDKs—it works over standard HTTP headers and JSON.
+## How It Works
 
-### 1. Authentication Headers
-
-Provide the secret authorization password in any of the following standard HTTP headers:
-
-| Header | Example | Description |
-|---|---|---|
-| `x-auth-token` | `00000000` | Recommended custom header |
-| `Authorization` | `Bearer 00000000` | Standard Bearer token format |
-| `x-auth-password` | `00000000` | Alternative custom header |
-
-*(Query parameter `?auth=00000000` is also supported).*
-
----
-
-### 2. Receiving RFID Keys (`/node`)
-
-#### Method A: Long-Polling HTTP Tool (Recommended for AI Agents)
-The AI agent sends a request that holds open until a physical card is tapped on the reader, then immediately resolves with the encrypted key.
-
-- **Endpoint**: `GET https://rfid.pranab.space/node?wait=true`
-- **Headers**:
-  ```http
-  x-auth-token: 00000000
-  ```
-
-**cURL Command**:
-```bash
-curl -s -H "x-auth-token: 00000000" "https://rfid.pranab.space/node?wait=true"
+```text
+RC522 + ESP8266 or ESP32 -> /host -> Relay Server -> /node
+                                      |
+                                      +-> WebSocket
+                                      +-> Server-Sent Events
+                                      +-> HTTP long polling
+                                      +-> Browser dashboard
 ```
 
-**JSON Response When Card Is Scanned**:
+The physical UID is never written to the relay server's database because no database is used. In connected mode, the server derives a fixed 20-character discriminant with HMAC-SHA256 and forwards that value to nodes. Raw UID handling remains available in host acknowledgements and HTTP responses for integrations that need it.
+
+If no listener is connected, an incoming scan is discarded.
+
+## Requirements
+
+- Node.js 18 or newer
+- An ESP8266 or ESP32
+- An RC522 RFID module
+- Optional: Cloudflare account and Wrangler
+
+## Local Setup
+
+```bash
+npm install
+cp .env.example .env
+```
+
+Set `.env` to a private, randomly generated secret:
+
+```dotenv
+PORT=3000
+HOST=0.0.0.0
+AUTH_PASSWORD=replace-with-a-long-random-secret
+```
+
+Generate a strong secret:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+Start the server:
+
+```bash
+npm start
+```
+
+Open `http://localhost:3000`, then enter the same authorization password configured in `.env`.
+
+## Environment and Git Safety
+
+The server reads `PORT`, `HOST`, and `AUTH_PASSWORD` from `.env` through `dotenv`.
+
+This repository deliberately does not ignore `.env` in `.gitignore`. That makes accidental secret commits more likely, so keep `.env` private and never add real credentials to source control. `.env.example` contains placeholders only.
+
+Before publishing, scan tracked files:
+
+```bash
+git grep -n -I -E '(AUTH_PASSWORD|WIFI_PASSWORD|SECRET|TOKEN)'
+git add -A
+git diff --cached
+```
+
+Use secret scanning in CI or a repository hosting provider before every public release.
+
+## Authentication
+
+Every protected endpoint accepts one of these forms:
+
+```text
+x-auth-token: your-secret
+x-auth-password: your-secret
+Authorization: Bearer your-secret
+Authorization: your-secret
+?auth=your-secret
+```
+
+Use headers instead of query parameters when possible. Query parameters may appear in proxy logs.
+
+## API
+
+### Health
+
+```http
+GET /health
+```
+
+Health is intentionally unauthenticated.
+
+### Publish with HTTP
+
+```bash
+curl -X POST "http://localhost:3000/host" \
+  -H "x-auth-token: your-secret" \
+  -H "Content-Type: application/json" \
+  -d '{"uid":"04:A1:22:7B"}'
+```
+
+Valid UID formats include colon-separated, dash-separated, or contiguous hexadecimal values:
+
+```text
+04:A1:22:7B
+04A1227B
+04-12-34-56-78-9A-BC
+```
+
+### Listen with HTTP Long Polling
+
+```bash
+curl "http://localhost:3000/node?wait=true" \
+  -H "x-auth-token: your-secret"
+```
+
+The request waits up to 25 seconds. If no card is scanned, it returns `{"status":"timeout","message":"No card scanned, re-poll"}`.
+
+### Listen with WebSocket
+
+```text
+ws://localhost:3000/node?auth=your-secret
+```
+
+The first event is a welcome message. Scan events use this shape:
+
 ```json
 {
   "type": "rfid",
-  "encryptedKey": "325B385EFEA00E8F107A",
-  "discriminant": "325B385EFEA00E8F107A",
-  "uid": "325B385EFEA00E8F107A",
+  "discriminant": "A1B2C3D4E5F60718293A",
+  "encryptedKey": "A1B2C3D4E5F60718293A",
+  "uid": "A1B2C3D4E5F60718293A",
   "length": 20,
   "timestamp": 1794866627088,
   "timeISO": "2026-11-16T22:03:47.088Z"
 }
 ```
 
-*If no card is tapped within 25 seconds, it returns a timeout status: `{"status": "timeout"}`. The agent simply calls the endpoint again to continue waiting.*
+### Listen with Server-Sent Events
 
----
-
-#### Method B: Real-Time WebSocket (0-Latency Streaming)
-For continuous, event-driven agents:
-
-- **Endpoint**: `wss://rfid.pranab.space/node?auth=00000000`
-- **Initial Welcome Message**:
-  ```json
-  {
-    "type": "welcome",
-    "role": "node",
-    "message": "Connected as live listening node (0 latency)",
-    "hostsActive": 1
-  }
-  ```
-- **Incoming Scan Event**:
-  ```json
-  {
-    "type": "rfid",
-    "encryptedKey": "325B385EFEA00E8F107A",
-    "discriminant": "325B385EFEA00E8F107A",
-    "uid": "325B385EFEA00E8F107A",
-    "length": 20,
-    "timestamp": 1794866627088,
-    "timeISO": "2026-11-16T22:03:47.088Z"
-  }
-  ```
-
----
-
-### 3. Sending 2-Way Commands Back to the Hardware Reader
-
-An AI agent can trigger hardware actions (e.g. unlock door, flash LED, beep buzzer) by posting back to `/node`:
-
-- **Endpoint**: `POST https://rfid.pranab.space/node`
-- **Headers**:
-  ```http
-  Content-Type: application/json
-  x-auth-token: 00000000
-  ```
-- **Payload**:
-  ```json
-  {
-    "command": "flash",
-    "action": "access_granted",
-    "cardKey": "325B385EFEA00E8F107A",
-    "message": "Welcome User"
-  }
-  ```
-
----
-
-### 4. Agent Tool Implementation Examples
-
-#### Python Tool Function (for LangChain, LlamaIndex, or AutoGen)
-```python
-import requests
-
-def wait_for_rfid_scan(server_url="https://rfid.pranab.space", auth_token="00000000", max_attempts=5):
-    """
-    Waits for a physical RFID card to be tapped on the RC522 reader.
-    Returns the 20-character encrypted RFID key.
-    """
-    headers = {
-        "x-auth-token": auth_token,
-        "Accept": "application/json"
-    }
-    
-    for _ in range(max_attempts):
-        try:
-            response = requests.get(f"{server_url}/node?wait=true", headers=headers, timeout=30)
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("type") == "rfid" and "encryptedKey" in data:
-                    return data["encryptedKey"]
-        except requests.exceptions.RequestException:
-            continue
-            
-    return None
-```
-
-#### Node.js Tool Function
-```javascript
-async function waitForRfidScan(serverUrl = 'https://rfid.pranab.space', authToken = '00000000') {
-  const response = await fetch(`${serverUrl}/node?wait=true`, {
-    headers: {
-      'x-auth-token': authToken
-    }
-  });
-  
-  const data = await response.json();
-  if (data && data.type === 'rfid' && data.encryptedKey) {
-    return data.encryptedKey;
-  }
-  return null;
-}
-```
-
----
-
-## 🏗️ System Architecture
+Cloudflare mode supports:
 
 ```text
-  ┌──────────────────────────────┐              ┌─────────────────────────────┐
-  │   ESP8266 / ESP32 + RC522    │              │       AI Agent / Node       │
-  │    (Hardware RFID Reader)    │              │   (Tool / CLI / Browser)    │
-  └──────────────┬───────────────┘              └──────────────▲──────────────┘
-                 │                                             │
-           /host │ (WSS / HTTP)                          /node │ (WSS / HTTP ?wait=true)
-                 │                                             │
-                 ▼                                             │
-  ┌────────────────────────────────────────────────────────────┴──────────────┐
-  │                     RFID RC522 Relay Server                               │
-  │                   (Cloudflare Worker + Node.js)                           │
-  │                                                                           │
-  │ • Validates RFID key format                                               │
-  │ • Server encrypts key into exact 20-char discriminant string              │
-  │ • Zero-Persistence: In-memory live routing only (never stored to DB/disk) │
-  │ • Auto-Drop: If no agent/node is connected, scan is immediately dropped    │
-  │ • Bidirectional: Nodes & AI agents can send commands back to hardware     │
-  └───────────────────────────────────────────────────────────────────────────┘
+GET /node?stream=true
 ```
 
----
+### Send a Command to Readers
 
-## ⚙️ Hardware Setup (ESP8266 & ESP32 Dual Support)
-
-The firmware in [`nodemcu/nodemcu.ino`](file:///f:/PROJECTS/RC522%20Server/nodemcu/nodemcu.ino) automatically detects whether you compile for ESP8266 or ESP32.
-
-### Pinout Connections
-
-> [!CAUTION]
-> RC522 is **3.3V logic**. Connect VCC to **3V3**, NOT to 5V (Vin)!
-
-| RC522 Pin | ESP8266 (NodeMCU) | ESP32 (DevKit V1) | Description |
-|---|---|---|---|
-| **SDA (SS)** | **D8** (GPIO 15) | **GPIO 5** (VSPI SS) | SPI Chip Select |
-| **SCK** | **D5** (GPIO 14) | **GPIO 18** (VSPI SCK) | SPI Clock |
-| **MOSI** | **D7** (GPIO 13) | **GPIO 23** (VSPI MOSI) | Master Out Slave In |
-| **MISO** | **D6** (GPIO 12) | **GPIO 19** (VSPI MISO) | Master In Slave Out |
-| **RST** | **D3** (GPIO 0) | **GPIO 22** | Reset |
-| **GND** | **GND** | **GND** | Ground |
-| **3.3V** | **3V3** | **3V3** | Power (3.3V ONLY) |
-
----
-
-## 💻 Running & Testing
-
-### 1. Test Node Client CLI
 ```bash
-# Connect to production relay
-node test/node-client.js
+curl -X POST "http://localhost:3000/node" \
+  -H "x-auth-token: your-secret" \
+  -H "Content-Type: application/json" \
+  -d '{"command":"flash","action":"access_granted","message":"Welcome"}'
+```
 
-# Or connect to local server
+Or send JSON over `ws://localhost:3000/node?auth=your-secret`.
+
+## Firmware Setup
+
+Open `nodemcu/nodemcu.ino` in Arduino IDE and set:
+
+```cpp
+const char* WIFI_SSID     = "YOUR_WIFI_SSID";
+const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char* SERVER_HOST   = "relay.example.com";
+const char* AUTH_PASSWORD = "YOUR_RFID_SERVER_AUTH_PASSWORD";
+```
+
+Use a production server hostname and HTTPS for deployed use. Do not commit real firmware credentials. The Arduino environment is single-board firmware, so credentials are stored in the sketch rather than `.env`. Add a private copy of the sketch or build-time secrets to your workflow if you need them excluded from source control.
+
+Complete wiring and library instructions are in [nodemcu/README.md](nodemcu/README.md).
+
+## Node.js Listener
+
+```bash
+cp .env.example .env
+npm start
 node test/node-client.js --local
 ```
 
-### 2. Run Local Relay Server
+Connect to a remote deployment:
+
 ```bash
-npm install
-npm start
+node test/node-client.js --host relay.example.com --auth your-secret
 ```
-- Web Dashboard: `http://localhost:3000`
-- API Health Status: `http://localhost:3000/health?auth=00000000`
+
+You can instead set `AUTH_PASSWORD` in `.env` and omit `--auth`.
+
+## Cloudflare Deployment
+
+`worker.js` and `wrangler.jsonc` provide a Durable Object-backed deployment.
+
+1. Install dependencies.
+2. Run `npx wrangler login`.
+3. Create the secret:
+
+```bash
+npx wrangler secret put AUTH_PASSWORD
+```
+
+4. Deploy:
+
+```bash
+npm run deploy
+```
+
+No domain or zone route is committed. Add routes to your own Cloudflare worker settings or configure `routes` locally when deploying.
+
+## Security
+
+- Generate and keep `AUTH_PASSWORD` secret.
+- Use HTTPS and WSS in production.
+- Restrict network exposure and add rate limiting if the relay faces the public internet.
+- Treat the HMAC discriminant as an identifier, not an irreversible proof.
+- Rotate `AUTH_PASSWORD` if it is exposed; all derived discriminants change after rotation.
+- Encrypt transport and restrict command permissions.
+- Do not use this example alone for safety-critical physical access control.
+
+## Testing
+
+With the server running:
+
+```bash
+npm test
+```
+
+The test listener expects `.env` and a local server on port 3000.
+
+## Contributing
+
+Contributions are welcome. Keep changes small, avoid personal configuration, and do not introduce secrets or dependencies that require data collection.
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).

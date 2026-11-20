@@ -11,12 +11,6 @@
     "directory": "public",
     "binding": "ASSETS"
   },
-  "routes": [
-    {
-      "pattern": "rfid.pranab.space/*",
-      "zone_name": "pranab.space"
-    }
-  ],
   "durable_objects": {
     "bindings": [
       {

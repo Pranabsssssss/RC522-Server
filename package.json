@@ -1,7 +1,7 @@
 {
   "name": "rc522-server",
   "version": "1.0.0",
-  "description": "",
+  "description": "A multipurpose real-time RFID RC522 relay for ESP8266 and ESP32 nodes",
   "main": "index.js",
   "scripts": {
     "start": "node server.js",
@@ -14,9 +14,9 @@
     "type": "git",
     "url": "git+https://github.com/Pranabsssssss/RC522-Server.git"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": ["rfid", "rc522", "esp8266", "esp32", "iot", "websocket"],
+  "author": "RC522-Server contributors",
+  "license": "MIT",
   "type": "commonjs",
   "bugs": {
     "url": "https://github.com/Pranabsssssss/RC522-Server/issues"

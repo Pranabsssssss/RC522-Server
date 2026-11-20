@@ -1,74 +1,43 @@
-# NodeMCU ESP8266 + RC522 RFID Live Client
+# ESP8266 and ESP32 RC522 Firmware
 
-This sketch enables your ESP8266 NodeMCU with an RC522 RFID reader to stream RFID card scans with **0-latency** to `rfid.pranab.space/host`.
+This sketch reads RC522 cards and sends their hardware UID to the relay server through WebSocket. HTTP POST is used when WebSocket is unavailable.
 
----
+## Wiring
 
-## 1. Hardware Pin Connections (SPI)
+RC522 operates at 3.3V. Never connect VCC to 5V.
 
-> [!CAUTION]
-> The RC522 RFID module operates on **3.3V logic**. Connecting RC522 VCC to 5V (Vin) will permanently damage the module. Always connect VCC to the **3V3** pin of NodeMCU.
+| RC522 | ESP8266 NodeMCU | ESP32 |
+|---|---|---|
+| SDA/SS | D8, GPIO15 | GPIO5 |
+| SCK | D5, GPIO14 | GPIO18 |
+| MOSI | D7, GPIO13 | GPIO23 |
+| MISO | D6, GPIO12 | GPIO19 |
+| RST | D3, GPIO0 | GPIO22 |
+| GND | GND | GND |
+| 3.3V | 3V3 | 3V3 |
 
-| RC522 Pin | NodeMCU Pin | ESP8266 GPIO | Description |
-|-----------|-------------|--------------|-------------|
-| **SDA (SS)** | **D8** | GPIO15 | SPI Slave Select |
-| **SCK** | **D5** | GPIO14 | SPI Clock |
-| **MOSI** | **D7** | GPIO13 | SPI Master Out Slave In |
-| **MISO** | **D6** | GPIO12 | SPI Master In Slave Out |
-| **IRQ** | *Unconnected* | - | Interrupt (Not required) |
-| **GND** | **GND** | GND | Ground |
-| **RST** | **D3** | GPIO0 | Reset pin |
-| **3.3V** | **3V3** | 3.3V | Power Supply (3.3V ONLY) |
+## Arduino IDE
 
----
+Install the ESP8266 or ESP32 board package and these libraries:
 
-## 2. Arduino IDE Setup
+- MFRC522
+- WebSockets
 
-1. **Install ESP8266 Board Package**:
-   - Go to `File` > `Preferences`.
-   - Add this URL to **Additional Boards Manager URLs**:
-     `http://arduino.esp8266.com/stable/package_esp8266com_index.json`
-   - Open `Tools` > `Board` > `Boards Manager...`, search for `esp8266` and click **Install**.
+Select the matching board, compile `nodemcu.ino`, and upload it.
 
-2. **Install Required Libraries**:
-   - Open `Sketch` > `Include Library` > `Manage Libraries...`
-   - Search and install:
-     - **MFRC522** (by GithubCommunity)
-     - **WebSockets** (by Markus Sattler)
+## Configuration
 
-3. **Select Board & Settings**:
-   - Board: `NodeMCU 1.0 (ESP-12E Module)`
-   - Upload Speed: `115200` or `921600`
-   - CPU Frequency: `80 MHz` (or `160 MHz`)
-   - Flash Size: `4MB (FS:2MB OTA:~1019KB)`
-   - Port: Select your COM port
+Edit the placeholders in `nodemcu.ino`:
 
----
+```cpp
+const char* WIFI_SSID     = "YOUR_WIFI_SSID";
+const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+const char* SERVER_HOST   = "relay.example.com";
+const char* AUTH_PASSWORD = "YOUR_RFID_SERVER_AUTH_PASSWORD";
+```
 
-## 3. Wi-Fi & Server Settings (Pre-configured)
+Set `USE_SSL` to `true` for HTTPS/WSS deployments. Set `SERVER_PORT` to the external HTTPS port, normally `443`.
 
-The sketch is pre-configured with:
-- **SSID**: `Excitel_Saini's 4G`
-- **Wi-Fi Password**: `00000000`
-- **Relay Server**: `rfid.pranab.space`
-- **Auth Password**: `00000000`
-- **mDNS Hostname**: `rfid-nodemcu.local`
+These values belong in firmware because Arduino IDE does not read the Node.js `.env` file. Keep real values out of public commits and use private firmware copies or build-time secret injection when distributing builds.
 
----
-
-## 4. Flash and Monitor
-
-1. Connect NodeMCU via micro-USB.
-2. Click **Upload** in Arduino IDE.
-3. Open **Serial Monitor** at **115200 baud**.
-4. You will see:
-   ```text
-   ===========================================
-    ESP8266 NodeMCU RC522 RFID Live Hub Client
-   ===========================================
-   [RC522] RFID Reader Initialized.
-   [WiFi] Connected successfully!
-   [mDNS] Responder started: http://rfid-nodemcu.local
-   [WS] Connected to live relay on rfid.pranab.space
-   ```
-5. Scan an RFID tag/card. The onboard LED will flash, and the UID will be streamed instantly with zero latency to all connected nodes!
+Open the Serial Monitor at 115200 baud after upload. The onboard LED indicates connection and scan activity.

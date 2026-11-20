@@ -1,46 +1,18 @@
-/**
- * RFID RC522 Live Relay Hub — Cloudflare Worker + Durable Object
- *
- * Full JSON API + WebSocket Hibernation + 20-Char RFID Key Encryption:
- *
- * Security & Validation:
- * - Only valid RFID keys/UIDs are allowed to be transferred.
- * - Server encrypts each RFID key into a 20-character discriminant string using AUTH_PASSWORD from .env.
- * - Deterministic: same card always produces the same unique 20-character key discriminant.
- * - NodeMCU / ESP scans the full hardware UID, and server performs the encryption before routing to nodes.
- *
- * JSON APIs:
- * - POST /host?auth=xxx   : Host sends raw RFID UID as JSON: {"uid": "41:CC:69:06"}
- *                           Server validates, encrypts into 20-char key, routes to nodes.
- * - GET  /host?auth=xxx   : Host status JSON.
- * - GET  /node?auth=xxx&wait=true : Live Long-Polling JSON API. Waits for next card scan, returns JSON immediately.
- * - GET  /node?auth=xxx&stream=true : SSE Stream returning real-time JSON events.
- * - POST /node?auth=xxx   : Node sends command JSON back to hosts.
- * - WSS  /host & WSS /node : Real-time 2-way WebSockets with keepalive.
- */
 
-/**
- * Validate that input string is strictly a valid RFID key/UID format:
- * - 4-byte UID (e.g. "DB:23:03:07" or "DB230307")
- * - 7-byte UID (e.g. "04:12:34:56:78:9A:BC" or "04123456789ABC")
- * - 10-byte UID (e.g. "04:12:34:56:78:9A:BC:DE:F0:12")
- */
+
+
 function isValidRfidKey(str) {
   if (typeof str !== 'string') return false;
   const trimmed = str.trim();
-  // Formatted hex with colons/dashes: 4 to 10 bytes
   if (/^([0-9A-Fa-f]{2}[:-]){3,9}[0-9A-Fa-f]{2}$/.test(trimmed)) return true;
-  // Contiguous hex string: 8 to 20 hex characters, even length
   if (/^[0-9A-Fa-f]{8,20}$/.test(trimmed) && trimmed.length % 2 === 0) return true;
   return false;
 }
 
-/**
- * Encrypt each RFID key into a 20-character string discriminant using AUTH_PASSWORD
- * Uses HMAC-SHA256 keyed hash for deterministic, secure 20-character pseudonymization.
- */
-async function encryptRfidKey(rawUid, password = '00000000') {
-  const secret = (password && typeof password === 'string' && password.length > 0) ? password : '00000000';
+
+async function encryptRfidKey(rawUid, password) {
+  if (!password) throw new Error('AUTH_PASSWORD is required');
+  const secret = password;
   const cleanUid = String(rawUid).toUpperCase().trim();
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey(
@@ -68,19 +40,17 @@ export class RfidRelayHub {
   async fetch(request) {
     const url = new URL(request.url);
     const pathname = url.pathname;
-    const password = (this.env && this.env.AUTH_PASSWORD) || '00000000';
+    const password = this.env && this.env.AUTH_PASSWORD;
+    if (!password) return corsJson({ error: 'Server configuration error: AUTH_PASSWORD is not set' }, 500);
 
-    // CORS preflight
     if (request.method === 'OPTIONS') {
       return corsResponse(null, 204);
     }
 
-    // Auth verification
     if (!this._isAuthed(request, password)) {
       return corsJson({ error: 'Unauthorized: Invalid auth password' }, 401);
     }
 
-    // /health
     if (pathname === '/health' || pathname === '/status') {
       return corsJson({
         status: 'online',
@@ -91,12 +61,10 @@ export class RfidRelayHub {
       });
     }
 
-    // /host
     if (pathname === '/host') {
       return this._handleHost(request, password);
     }
 
-    // /node
     if (pathname === '/node') {
       return this._handleNode(request);
     }
@@ -104,13 +72,9 @@ export class RfidRelayHub {
     return corsJson({ error: 'Endpoint not found' }, 404);
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // HOST HANDLER (/host)
-  // ═══════════════════════════════════════════════════════════════
   async _handleHost(request, password) {
     const upgrade = request.headers.get('Upgrade');
 
-    // 1. WebSocket Upgrade from NodeMCU / ESP
     if (upgrade && upgrade.toLowerCase() === 'websocket') {
       const pair = new WebSocketPair();
       const client = pair[0];
@@ -137,7 +101,6 @@ export class RfidRelayHub {
       return new Response(null, { status: 101, webSocket: client });
     }
 
-    // 2. HTTP POST from ESP / NodeMCU (JSON API)
     if (request.method === 'POST') {
       try {
         const bodyText = await request.text();
@@ -153,14 +116,12 @@ export class RfidRelayHub {
           return corsJson({ error: 'Missing RFID key in JSON payload' }, 400);
         }
 
-        // Validate strictly: only allow valid RFID keys
         if (!isValidRfidKey(rawUid)) {
           return corsJson({
             error: 'Invalid RFID key format. Only valid RFID keys are allowed to be transferred.'
           }, 400);
         }
 
-        // Encrypt RFID key into 20-character discriminant
         const encryptedKey = await encryptRfidKey(rawUid, password);
 
         const routedCount = this._broadcastRfidScan(rawUid, encryptedKey, payload);
@@ -180,7 +141,6 @@ export class RfidRelayHub {
       }
     }
 
-    // 3. HTTP GET: Return JSON status
     return corsJson({
       endpoint: '/host',
       status: 'ready',
@@ -190,14 +150,10 @@ export class RfidRelayHub {
     });
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // NODE HANDLER (/node)
-  // ═══════════════════════════════════════════════════════════════
   async _handleNode(request) {
     const url = new URL(request.url);
     const upgrade = request.headers.get('Upgrade');
 
-    // 1. WebSocket Upgrade from Node listener
     if (upgrade && upgrade.toLowerCase() === 'websocket') {
       const pair = new WebSocketPair();
       const client = pair[0];
@@ -225,7 +181,6 @@ export class RfidRelayHub {
       return new Response(null, { status: 101, webSocket: client });
     }
 
-    // 2. HTTP POST from Node back to Hosts (2-Way Command JSON API)
     if (request.method === 'POST') {
       try {
         const bodyText = await request.text();
@@ -249,7 +204,6 @@ export class RfidRelayHub {
       }
     }
 
-    // 3. HTTP GET with wait=true / poll=true (LONG-POLLING JSON API)
     if (url.searchParams.get('wait') === 'true' || url.searchParams.get('poll') === 'true') {
       return new Promise((resolve) => {
         const entry = { resolve, timeoutId: null };
@@ -266,7 +220,6 @@ export class RfidRelayHub {
       });
     }
 
-    // 4. HTTP GET with stream=true (SSE JSON Stream)
     if (url.searchParams.get('stream') === 'true' || request.headers.get('Accept') === 'text/event-stream') {
       const { readable, writable } = new TransformStream();
       const writer = writable.getWriter();
@@ -295,7 +248,6 @@ export class RfidRelayHub {
       });
     }
 
-    // 5. Plain HTTP GET status
     return corsJson({
       endpoint: '/node',
       status: 'ready',
@@ -309,12 +261,10 @@ export class RfidRelayHub {
     });
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // WEBSOCKET MESSAGE HANDLER (Invoked by Cloudflare Hibernation)
-  // ═══════════════════════════════════════════════════════════════
   async webSocketMessage(ws, message) {
     try {
-      const password = (this.env && this.env.AUTH_PASSWORD) || '00000000';
+      const password = this.env && this.env.AUTH_PASSWORD;
+      if (!password) return corsJson({ error: 'Server configuration error: AUTH_PASSWORD is not set' }, 500);
       const text = typeof message === 'string' ? message : new TextDecoder().decode(message);
       let payload;
       try {
@@ -330,7 +280,6 @@ export class RfidRelayHub {
 
       const rawUid = payload.uid || payload.rfid || payload.tag;
       if (rawUid) {
-        // Validate strictly: only allow valid RFID keys
         if (!isValidRfidKey(rawUid)) {
           this._safeSend(ws, { type: 'error', message: 'Rejected: Only valid RFID keys are allowed.' });
           return;
@@ -351,7 +300,6 @@ export class RfidRelayHub {
         return;
       }
 
-      // If it's a 2-way command from node, forward to hosts
       this._forwardToHosts(payload);
     } catch (err) {
       console.error('WS Message error:', err);
@@ -368,17 +316,14 @@ export class RfidRelayHub {
     this.nodes.delete(ws);
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // BROADCASTING ENCRYPTED 20-CHAR RFID KEYS TO ALL NODES
-  // ═══════════════════════════════════════════════════════════════
   _broadcastRfidScan(rawUid, encryptedKey, extra = {}) {
     const timestamp = Date.now();
     const scanJson = {
       type: 'rfid',
       discriminant: encryptedKey,
       encryptedKey: encryptedKey,
-      uid: encryptedKey, // Primary 20-char encrypted key discriminant
-      rawUid: rawUid,    // Full scanned hardware RFID key
+      uid: encryptedKey,
+      rawUid: rawUid,
       length: encryptedKey.length,
       timestamp: timestamp,
       timeISO: new Date(timestamp).toISOString(),
@@ -389,7 +334,6 @@ export class RfidRelayHub {
     let deliveredCount = 0;
     const sentSet = new Set();
 
-    // 1. Deliver to HTTP Long-Polling waiting nodes
     for (const entry of this.waitingHttpNodes) {
       try {
         clearTimeout(entry.timeoutId);
@@ -399,7 +343,6 @@ export class RfidRelayHub {
     }
     this.waitingHttpNodes.clear();
 
-    // 2. Deliver to WebSockets via Hibernation API
     if (this.ctx && typeof this.ctx.getWebSockets === 'function') {
       const hibernatedNodes = this.ctx.getWebSockets('node');
       for (const ws of hibernatedNodes) {
@@ -411,7 +354,6 @@ export class RfidRelayHub {
       }
     }
 
-    // 3. Deliver to manual WebSockets / SSE
     for (const node of this.nodes) {
       if (!sentSet.has(node)) {
         try {
@@ -510,9 +452,6 @@ export class RfidRelayHub {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
-// CLOUDFLARE WORKER ROUTER
-// ═══════════════════════════════════════════════════════════════
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);

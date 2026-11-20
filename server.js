@@ -1,16 +1,4 @@
-/**
- * RFID RC522 Sensor Relay Server
- * 
- * Architecture:
- * - /host: Connected ESP8266 NodeMCU (or RFID reader) streaming RFID card scans.
- * - /node: Connected listening devices / applications receiving real-time RFID scans.
- * 
- * Features:
- * - 0 latency real-time 2-way data transfer via WebSockets.
- * - Zero persistence: RFID keys are routed in-memory only and never saved to disk or DB.
- * - If no nodes are connected when a card is scanned, the RFID key is immediately dropped.
- * - Authorization protected using AUTH_PASSWORD from .env.
- */
+
 
 require('dotenv').config();
 const http = require('http');
@@ -22,16 +10,18 @@ const { WebSocketServer, WebSocket } = require('ws');
 
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
-const AUTH_PASSWORD = process.env.AUTH_PASSWORD || '00000000';
+const AUTH_PASSWORD = process.env.AUTH_PASSWORD;
 
-// Active in-memory connections (Zero persistent storage)
+if (!AUTH_PASSWORD) {
+  console.error('AUTH_PASSWORD is required. Copy .env.example to .env and set a secure value.');
+  process.exit(1);
+}
+
 const connectedHosts = new Set();
 const connectedNodes = new Set();
 const waitingHttpClients = new Set();
 
-/**
- * Validate strictly: only valid RFID keys are allowed
- */
+
 function isValidRfidKey(str) {
   if (typeof str !== 'string') return false;
   const trimmed = str.trim();
@@ -40,22 +30,16 @@ function isValidRfidKey(str) {
   return false;
 }
 
-/**
- * Encrypt each RFID key into a 20-character string discriminant using AUTH_PASSWORD from .env
- */
+
 function encryptRfidKey(rawUid, password) {
   const cleanUid = rawUid.toUpperCase().trim();
   return crypto.createHmac('sha256', password).update(cleanUid).digest('hex').substring(0, 20).toUpperCase();
 }
 
-/**
- * Validate authorization credential
- */
+
 function isAuthorized(req, queryAuth) {
-  // Check query parameter (?auth=...)
   if (queryAuth && queryAuth === AUTH_PASSWORD) return true;
 
-  // Check headers (x-auth-token, x-auth-password, or Authorization Bearer)
   const headerToken = req.headers['x-auth-token'] || req.headers['x-auth-password'];
   if (headerToken && headerToken === AUTH_PASSWORD) return true;
 
@@ -69,18 +53,15 @@ function isAuthorized(req, queryAuth) {
   return false;
 }
 
-/**
- * HTTP Request Handler
- */
+
 const server = http.createServer((req, res) => {
   const reqUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = reqUrl.pathname;
   const query = Object.fromEntries(reqUrl.searchParams.entries());
 
-  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-auth-token');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-auth-token, x-auth-password');
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -88,7 +69,6 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Health check endpoint
   if (pathname === '/health' || pathname === '/status') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
@@ -102,7 +82,6 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // HTTP POST /host endpoint (Allows pushing RFID scan via HTTP in JSON)
   if (pathname === '/host' && req.method === 'POST') {
     if (!isAuthorized(req, query.auth)) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -154,7 +133,6 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // HTTP GET /node endpoint (Long-polling JSON API)
   if (pathname === '/node' && req.method === 'GET') {
     if (!isAuthorized(req, query.auth)) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -186,7 +164,6 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // HTTP POST /node endpoint (2-Way Commands from Node to Hosts)
   if (pathname === '/node' && req.method === 'POST') {
     if (!isAuthorized(req, query.auth)) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -217,7 +194,6 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Serve static files from public/ directory
   let filePath = path.join(__dirname, 'public', pathname === '/' ? 'index.html' : pathname);
   
   if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
@@ -235,7 +211,6 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': contentType });
     fs.createReadStream(filePath).pipe(res);
   } else {
-    // If requesting root or unknown path, fallback to index.html if present
     const indexPath = path.join(__dirname, 'public', 'index.html');
     if (fs.existsSync(indexPath)) {
       res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -247,18 +222,14 @@ const server = http.createServer((req, res) => {
   }
 });
 
-/**
- * Route an incoming RFID scan from Host to connected Nodes
- */
+
 function routeRfidScan(rawUid, extraData = {}) {
   const timestamp = Date.now();
   const timeISO = new Date(timestamp).toISOString();
   const totalNodes = connectedNodes.size + waitingHttpClients.size;
 
-  // Encrypt raw RFID key into 20-character discriminant
   const encryptedKey = encryptRfidKey(rawUid, AUTH_PASSWORD);
 
-  // If no nodes are connected, drop the key immediately
   if (totalNodes === 0) {
     console.log(`[RFID ${timeISO}] Key received: ${rawUid} -> Encrypted: ${encryptedKey} -> NO NODES CONNECTED. Dropping.`);
     return { action: 'dropped', reason: 'no_nodes_connected', rawUid, encryptedKey };
@@ -269,7 +240,7 @@ function routeRfidScan(rawUid, extraData = {}) {
     type: 'rfid',
     discriminant: encryptedKey,
     encryptedKey: encryptedKey,
-    uid: encryptedKey, // Primary 20-char encrypted discriminant
+    uid: encryptedKey,
     rawUid: rawUid,
     length: encryptedKey.length,
     timestamp: timestamp,
@@ -280,7 +251,6 @@ function routeRfidScan(rawUid, extraData = {}) {
 
   let sentCount = 0;
 
-  // 1. Deliver to HTTP Long-polling clients
   for (const client of waitingHttpClients) {
     try {
       clearTimeout(client.timeoutId);
@@ -293,7 +263,6 @@ function routeRfidScan(rawUid, extraData = {}) {
   }
   waitingHttpClients.clear();
 
-  // 2. Deliver to WebSocket clients
   for (const nodeSocket of connectedNodes) {
     if (nodeSocket.readyState === WebSocket.OPEN) {
       nodeSocket.send(message);
@@ -304,19 +273,15 @@ function routeRfidScan(rawUid, extraData = {}) {
   return { action: 'routed', nodesCount: sentCount, rawUid, encryptedKey };
 }
 
-/**
- * WebSocket Server Setup
- */
+
 const wssHost = new WebSocketServer({ noServer: true });
 const wssNode = new WebSocketServer({ noServer: true });
 
-// Handle HTTP Upgrade to WebSocket
 server.on('upgrade', (request, socket, head) => {
   const reqUrl = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
   const pathname = reqUrl.pathname;
   const queryAuth = reqUrl.searchParams.get('auth');
 
-  // Authorization Check
   if (!isAuthorized(request, queryAuth)) {
     console.warn(`[AUTH] Unauthorized WebSocket attempt on ${pathname} from ${request.socket.remoteAddress}`);
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
@@ -338,15 +303,12 @@ server.on('upgrade', (request, socket, head) => {
   }
 });
 
-/**
- * /host WebSocket Connection (ESP8266 NodeMCU RC522)
- */
+
 wssHost.on('connection', (ws, req) => {
   connectedHosts.add(ws);
   const clientIp = req.socket.remoteAddress;
   console.log(`[HOST] Host connected from ${clientIp}. Total hosts: ${connectedHosts.size}`);
 
-  // Send acknowledgement to host
   ws.send(JSON.stringify({
     type: 'welcome',
     role: 'host',
@@ -366,7 +328,6 @@ wssHost.on('connection', (ws, req) => {
         payload = { uid: text };
       }
 
-      // Heartbeat ping/pong handling
       if (payload.type === 'ping') {
         ws.send(JSON.stringify({ type: 'pong', time: Date.now() }));
         return;
@@ -375,7 +336,6 @@ wssHost.on('connection', (ws, req) => {
       const uid = payload.uid || payload.rfid || payload.tag;
       if (uid) {
         const routeResult = routeRfidScan(uid, payload);
-        // Reply back to host for 2-way confirmation
         ws.send(JSON.stringify({
           type: 'ack',
           uid: uid,
@@ -401,15 +361,12 @@ wssHost.on('connection', (ws, req) => {
   });
 });
 
-/**
- * /node WebSocket Connection (Listening Applications / Devices)
- */
+
 wssNode.on('connection', (ws, req) => {
   connectedNodes.add(ws);
   const clientIp = req.socket.remoteAddress;
   console.log(`[NODE] Node connected from ${clientIp}. Total nodes: ${connectedNodes.size}`);
 
-  // Send welcome message
   ws.send(JSON.stringify({
     type: 'welcome',
     role: 'node',
@@ -417,7 +374,6 @@ wssNode.on('connection', (ws, req) => {
     hostsActive: connectedHosts.size
   }));
 
-  // Notify connected hosts of new node count (2-way sync)
   const nodeCountUpdate = JSON.stringify({
     type: 'nodes_updated',
     count: connectedNodes.size
@@ -428,7 +384,6 @@ wssNode.on('connection', (ws, req) => {
     }
   }
 
-  // 2-way data transfer: Node can send messages/commands back to the host!
   ws.on('message', (data) => {
     try {
       const text = data.toString().trim();
@@ -447,7 +402,6 @@ wssNode.on('connection', (ws, req) => {
       }
 
       console.log(`[NODE -> HOSTS] Relaying message from node:`, payload);
-      // Forward command/message to all connected hosts
       const forwardMsg = JSON.stringify({
         type: 'node_message',
         data: payload,
@@ -468,7 +422,6 @@ wssNode.on('connection', (ws, req) => {
     connectedNodes.delete(ws);
     console.log(`[NODE] Node disconnected. Total nodes: ${connectedNodes.size}`);
 
-    // Update hosts
     const updateMsg = JSON.stringify({
       type: 'nodes_updated',
       count: connectedNodes.size
@@ -485,14 +438,13 @@ wssNode.on('connection', (ws, req) => {
   });
 });
 
-// Start HTTP & WebSocket Server
 if (require.main === module) {
   server.listen(PORT, HOST, () => {
     console.log('====================================================');
     console.log(`  RFID RC522 Sensor Relay Server running on:`);
     console.log(`  Local:   http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
-    console.log(`  Host WS: ws://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}/host?auth=${AUTH_PASSWORD}`);
-    console.log(`  Node WS: ws://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}/node?auth=${AUTH_PASSWORD}`);
+    console.log(`  Host WS: ws://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}/host`);
+    console.log(`  Node WS: ws://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}/node`);
     console.log(`  Storage: NONE (Pure In-Memory Real-time Routing)`);
     console.log('====================================================');
   });

@@ -282,11 +282,11 @@
       <div class="connection-panel">
         <div>
           <label for="serverHost">Server Domain / Host</label>
-          <input type="text" id="serverHost" placeholder="e.g. rfid.pranab.space" value="">
+          <input type="text" id="serverHost" placeholder="e.g. relay.example.com" value="">
         </div>
         <div>
           <label for="authPassword">Authorization Password</label>
-          <input type="password" id="authPassword" placeholder="Enter authorization password" value="00000000" autocomplete="off">
+          <input type="password" id="authPassword" placeholder="Enter authorization password"  autocomplete="off">
         </div>
         <div>
           <button id="toggleBtn" onclick="toggleConnection()">Connect as Node</button>
@@ -334,8 +334,7 @@
     let abortController = null;
     let scans = 0;
 
-    // Auto-detect default host
-    const defaultHost = window.location.host || 'rfid.pranab.space';
+    const defaultHost = window.location.host || 'localhost:3000';
     document.getElementById('serverHost').value = defaultHost;
 
     function playBeep() {
@@ -345,7 +344,7 @@
         const gain = ctx.createGain();
         osc.connect(gain);
         gain.connect(ctx.destination);
-        osc.frequency.value = 880; // A5 note
+        osc.frequency.value = 880;
         gain.gain.setValueAtTime(0.2, ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
         osc.start();
@@ -379,7 +378,7 @@
         return;
       }
 
-      const host = document.getElementById('serverHost').value.trim() || window.location.host || 'rfid.pranab.space';
+      const host = document.getElementById('serverHost').value.trim() || window.location.host || 'localhost:3000';
       const password = document.getElementById('authPassword').value.trim();
       if (!password) {
         updateStatus('offline', 'Enter the authorization password first');
@@ -422,7 +421,6 @@
           if (event.code === 4401 || event.code === 1008) {
             updateStatus('offline', 'Unauthorized: Invalid Password');
           } else {
-            // Auto-switch to HTTP Long-Polling JSON API
             startHttpPolling(host, password);
           }
         };
@@ -524,7 +522,7 @@
     function simulateScan() {
       const mockUids = ['E2:49:10:8B', 'A4:1F:B9:32', '7C:8A:22:90', '1B:6F:04:D8', 'F3:C8:51:7A'];
       const randomUid = mockUids[Math.floor(Math.random() * mockUids.length)];
-      const host = document.getElementById('serverHost').value.trim() || 'rfid.pranab.space';
+      const host = document.getElementById('serverHost').value.trim() || 'localhost:3000';
       const password = document.getElementById('authPassword').value.trim();
       const proto = window.location.protocol.startsWith('https') ? 'https:' : 'http:';
 
@@ -542,7 +540,6 @@
       });
     }
 
-    // Don't auto-connect; wait for user to click
   </script>
 </body>
 </html>
